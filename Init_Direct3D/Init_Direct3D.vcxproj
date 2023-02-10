@@ -144,14 +144,19 @@
     <ClInclude Include="..\Common\d3dUtil.h" />
     <ClInclude Include="..\Common\d3dx12.h" />
     <ClInclude Include="..\Common\GameTimer.h" />
+    <ClInclude Include="..\Common\MathHelper.h" />
     <ClInclude Include="D3DApp.h" />
     <ClInclude Include="InitDirect3DApp.h" />
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="..\Common\d3dUtil.cpp" />
     <ClCompile Include="..\Common\GameTimer.cpp" />
+    <ClCompile Include="..\Common\MathHelper.cpp" />
     <ClCompile Include="D3DApp.cpp" />
     <ClCompile Include="InitDirect3DApp.cpp" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="Color.hlsl" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

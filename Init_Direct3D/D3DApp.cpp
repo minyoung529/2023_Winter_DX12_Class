@@ -391,13 +391,13 @@ void D3DApp::FlushCommandQueue()
 {
 	mCurrentFence++;
 
-	ThrowIfFailed(mCommandQueue->Signal(mFence.Get(), mCurrentFence));
+	mCommandQueue->Signal(mFence.Get(), mCurrentFence);
 
 	if (mFence->GetCompletedValue() < mCurrentFence)
 	{
 		HANDLE eventHandle = CreateEventEx(nullptr, false, false, EVENT_ALL_ACCESS);
 
-		ThrowIfFailed(mFence->SetEventOnCompletion(mCurrentFence, eventHandle));
+		mFence->SetEventOnCompletion(mCurrentFence, eventHandle);
 
 		// 이벤트 끝날 때까지 대기
 		WaitForSingleObject(eventHandle, INFINITE);
@@ -414,26 +414,26 @@ void D3DApp::CreateCommandObject()
 	queueDesc.Flags = D3D12_COMMAND_QUEUE_FLAG_NONE;
 
 	// Cmd Queue
-	ThrowIfFailed(md3dDevice->CreateCommandQueue
+	md3dDevice->CreateCommandQueue
 	(
 		&queueDesc,
 		IID_PPV_ARGS(&mCommandQueue)
-	));
+	);
 
 	// Cmd Alloc
-	ThrowIfFailed(md3dDevice->CreateCommandAllocator(
+	md3dDevice->CreateCommandAllocator(
 		D3D12_COMMAND_LIST_TYPE_DIRECT,
 		IID_PPV_ARGS(&mDirectCmdListAlloc)
-	));
+	);
 
 	// Cmd List
-	ThrowIfFailed(md3dDevice->CreateCommandList(
+	md3dDevice->CreateCommandList(
 		0,
 		D3D12_COMMAND_LIST_TYPE_DIRECT,
 		mDirectCmdListAlloc.Get(),
 		nullptr,
 		IID_PPV_ARGS(&mCommandList)
-	));
+	);
 
 	mCommandList->Close();
 }
@@ -462,16 +462,16 @@ void D3DApp::CreateSwapChain()
 	scDesc.Flags = DXGI_SWAP_CHAIN_FLAG_ALLOW_MODE_SWITCH;
 
 	// SWAP CHAIN 만듦
-	ThrowIfFailed(mdxgiFactory->CreateSwapChain
+	mdxgiFactory->CreateSwapChain
 	(
 		mCommandQueue.Get(),
 		&scDesc,
 		&mSwapChain
-	));
+	);
 
 	for (int i = 0; i < SwapChainBufferCount; ++i)
 	{
-		ThrowIfFailed(mSwapChain->GetBuffer(i, IID_PPV_ARGS(&mSwapChainBuffer[i])));
+		mSwapChain->GetBuffer(i, IID_PPV_ARGS(&mSwapChainBuffer[i]));
 	}
 }
 
@@ -485,11 +485,11 @@ void D3DApp::CreateRtvDescriptorHeaps()
 	rtvHeapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_NONE;
 	rtvHeapDesc.NodeMask = 0;
 
-	ThrowIfFailed(md3dDevice->CreateDescriptorHeap
+	md3dDevice->CreateDescriptorHeap
 	(
 		&rtvHeapDesc,
 		IID_PPV_ARGS(&mRtvHeap)
-	));
+	);
 
 	CD3DX12_CPU_DESCRIPTOR_HANDLE rtvHeapHandle(mRtvHeap->GetCPUDescriptorHandleForHeapStart());
 	for (int i = 0; i < SwapChainBufferCount; i++)
@@ -509,11 +509,11 @@ void D3DApp::CreateDsvDescriptorHeaps()
 	dsvHeapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_NONE;
 	dsvHeapDesc.NodeMask = 0;
 
-	ThrowIfFailed(md3dDevice->CreateDescriptorHeap
+	md3dDevice->CreateDescriptorHeap
 	(
 		&dsvHeapDesc,
 		IID_PPV_ARGS(&mDsvHeap)	// 시작 주소
-	));
+	);
 
 	D3D12_RESOURCE_DESC depthStencilDesc;
 	depthStencilDesc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
@@ -536,7 +536,7 @@ void D3DApp::CreateDsvDescriptorHeaps()
 	optClear.DepthStencil.Stencil = 0.f;
 
 	//CommittedResource => CPU, GPU 공통 사용
-	ThrowIfFailed(md3dDevice->CreateCommittedResource
+	md3dDevice->CreateCommittedResource
 	(
 		&CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_DEFAULT), // GPU만 사용 가능
 		D3D12_HEAP_FLAG_NONE,
@@ -544,7 +544,7 @@ void D3DApp::CreateDsvDescriptorHeaps()
 		D3D12_RESOURCE_STATE_COMMON,
 		&optClear,
 		IID_PPV_ARGS(&mDepthStencilBuffer)
-	));
+	);
 
 	D3D12_DEPTH_STENCIL_VIEW_DESC dsvDesv;
 	dsvDesv.Flags = D3D12_DSV_FLAG_NONE;
