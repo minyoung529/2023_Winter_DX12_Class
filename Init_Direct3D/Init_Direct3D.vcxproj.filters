@@ -36,6 +36,9 @@
     <ClInclude Include="..\Common\MathHelper.h">
       <Filter>헤더 파일</Filter>
     </ClInclude>
+    <ClInclude Include="..\Common\GeometryGenerator.h">
+      <Filter>헤더 파일</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="D3DApp.cpp">
@@ -53,10 +56,19 @@
     <ClCompile Include="..\Common\MathHelper.cpp">
       <Filter>소스 파일</Filter>
     </ClCompile>
+    <ClCompile Include="..\Common\GeometryGenerator.cpp">
+      <Filter>소스 파일</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
-    <None Include="Color.hlsl">
+    <FxCompile Include="Color.hlsl">
       <Filter>Shader</Filter>
-    </None>
+    </FxCompile>
+    <FxCompile Include="Params.hlsl">
+      <Filter>Shader</Filter>
+    </FxCompile>
+    <FxCompile Include="LightingUtil.hlsl">
+      <Filter>Shader</Filter>
+    </FxCompile>
   </ItemGroup>
 </Project>

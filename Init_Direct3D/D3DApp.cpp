@@ -310,12 +310,11 @@ bool D3DApp::InitDirect3D()
 {
 	// Device 생성이 첫번째
 #pragma region  DEVICE
-// IID => 아이디로 바꿔줌 
-	ThrowIfFailed(CreateDXGIFactory1(IID_PPV_ARGS(&mdxgiFactory)));
+	CreateDXGIFactory1(IID_PPV_ARGS(&mdxgiFactory));
 
 	HRESULT hardwareResult = D3D12CreateDevice
 	(
-		nullptr/*Default Adapter (Base GPU)*/,
+		nullptr /* Default Adapter (Base GPU) */,
 		D3D_FEATURE_LEVEL_11_0,
 		IID_PPV_ARGS(&md3dDevice)
 	);
@@ -323,21 +322,21 @@ bool D3DApp::InitDirect3D()
 	if (FAILED(hardwareResult)) // 레벨을 지원하지 않으면
 	{
 		ComPtr<IDXGIAdapter> pWarpAdapter;
-		// Adapter를 하나씩 가지고옴
+		// warp 어댑터가 들어갈 공간
 
-		ThrowIfFailed(mdxgiFactory->EnumWarpAdapter(IID_PPV_ARGS(&pWarpAdapter)));
+		mdxgiFactory->EnumWarpAdapter(IID_PPV_ARGS(&pWarpAdapter));
 
-		ThrowIfFailed(D3D12CreateDevice
+		D3D12CreateDevice
 		(
 			pWarpAdapter.Get(), // 객체
 			D3D_FEATURE_LEVEL_11_0,
 			IID_PPV_ARGS(&md3dDevice)
-		));
+		);
 	}
 #pragma endregion
 
 #pragma region Fence
-	ThrowIfFailed(md3dDevice->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&mFence)));
+	md3dDevice->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&mFence));
 #pragma endregion
 
 #pragma region RTV Descriptor Size
@@ -358,21 +357,20 @@ bool D3DApp::InitDirect3D()
 
 	D3D12_FEATURE_DATA_MULTISAMPLE_QUALITY_LEVELS msQualityLevels;
 	msQualityLevels.Format = mBackBufferFormat;
-	msQualityLevels.SampleCount = 4;	// 4x MSAA
+	msQualityLevels.SampleCount = 16;	// 4x MSAA
 	msQualityLevels.Flags = D3D12_MULTISAMPLE_QUALITY_LEVELS_FLAG_NONE;
 	msQualityLevels.NumQualityLevels = 0;
 
 	// 후면 버퍼 4x MSAA 지원 여부 검사
-	ThrowIfFailed(md3dDevice->CheckFeatureSupport
+	md3dDevice->CheckFeatureSupport
 	(
 		D3D12_FEATURE_MULTISAMPLE_QUALITY_LEVELS,
 		&msQualityLevels,
 		sizeof(msQualityLevels)
-	));
+	);
 
 	m4xMsaaQuality = msQualityLevels.NumQualityLevels;
-	assert(m4xMsaaQuality > 0 && "Unexpected MSAA quality level.");
-
+	//assert(m4xMsaaQuality > 0);
 #pragma endregion
 
 	CreateCommandObject();
@@ -485,7 +483,7 @@ void D3DApp::CreateRtvDescriptorHeaps()
 	rtvHeapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_NONE;
 	rtvHeapDesc.NodeMask = 0;
 
-	md3dDevice->CreateDescriptorHeap
+		md3dDevice->CreateDescriptorHeap
 	(
 		&rtvHeapDesc,
 		IID_PPV_ARGS(&mRtvHeap)

@@ -122,10 +122,10 @@ protected:
 	ComPtr<ID3D12GraphicsCommandList>	mCommandList;
 
 	// Swap Chain
-	ComPtr<IDXGISwapChain>	mSwapChain;
-	static const int		SwapChainBufferCount = 2;	// back, front
-	int						mCurBackBuffer = 0;
-	ComPtr<ID3D12Resource>	mSwapChainBuffer[SwapChainBufferCount];
+	ComPtr<IDXGISwapChain>	mSwapChain;								
+	static const int		SwapChainBufferCount = 2;				// buffer count (front, back => 2)
+	int						mCurBackBuffer = 0;						// cur back index 
+	ComPtr<ID3D12Resource>	mSwapChainBuffer[SwapChainBufferCount];	// buffers
 
 	ComPtr<ID3D12DescriptorHeap>		mRtvHeap;
 	D3D12_CPU_DESCRIPTOR_HANDLE			mRtvView[SwapChainBufferCount] = {};	// аж╪р?

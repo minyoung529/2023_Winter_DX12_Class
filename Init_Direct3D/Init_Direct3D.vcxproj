@@ -144,6 +144,7 @@
     <ClInclude Include="..\Common\d3dUtil.h" />
     <ClInclude Include="..\Common\d3dx12.h" />
     <ClInclude Include="..\Common\GameTimer.h" />
+    <ClInclude Include="..\Common\GeometryGenerator.h" />
     <ClInclude Include="..\Common\MathHelper.h" />
     <ClInclude Include="D3DApp.h" />
     <ClInclude Include="InitDirect3DApp.h" />
@@ -151,12 +152,35 @@
   <ItemGroup>
     <ClCompile Include="..\Common\d3dUtil.cpp" />
     <ClCompile Include="..\Common\GameTimer.cpp" />
+    <ClCompile Include="..\Common\GeometryGenerator.cpp" />
     <ClCompile Include="..\Common\MathHelper.cpp" />
     <ClCompile Include="D3DApp.cpp" />
     <ClCompile Include="InitDirect3DApp.cpp" />
   </ItemGroup>
   <ItemGroup>
-    <None Include="Color.hlsl" />
+    <FxCompile Include="Color.hlsl">
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">true</ExcludedFromBuild>
+      <FileType>Document</FileType>
+      <EntryPointName Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
+      </EntryPointName>
+      <ShaderType Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">Effect</ShaderType>
+      <ShaderModel Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">5.0</ShaderModel>
+    </FxCompile>
+    <FxCompile Include="LightingUtil.hlsl">
+      <EntryPointName Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
+      </EntryPointName>
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">true</ExcludedFromBuild>
+    </FxCompile>
+  </ItemGroup>
+  <ItemGroup>
+    <FxCompile Include="Params.hlsl">
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">true</ExcludedFromBuild>
+      <FileType>Document</FileType>
+      <EntryPointName Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
+      </EntryPointName>
+      <ShaderType Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">Effect</ShaderType>
+      <ShaderModel Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">5.0</ShaderModel>
+    </FxCompile>
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">
