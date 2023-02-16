@@ -43,13 +43,15 @@ bool InitDirect3DApp::Initialize()
 	// 초기화 명령들을 준비하기 위해 명령 목록 재설정
 	mCommandList->Reset(mDirectCmdListAlloc.Get(), nullptr);
 
+	LoadTextures();
+
 	// 기하 도형 생성
 	BuildBoxGeometry();
 	BuildGridGeometry();
 	BuildSphereGeometry();
 	BuildCylinderGeometry();
 	BuildSkullGeometry();
-	
+
 	// 재질 생성
 	BuildMaterials();
 
@@ -61,6 +63,7 @@ bool InitDirect3DApp::Initialize()
 	BuildShader();
 	BuildConstantBuffers();
 	BuildRootSignature();
+	BuildDescriptorHeaps();
 	BuildPSO();
 
 	// 초기화 명령 실행
@@ -114,9 +117,11 @@ void InitDirect3DApp::UpdateObjectCBs(const GameTimer& gt)
 	for (auto& e : mRenderItems)
 	{
 		XMMATRIX world = XMLoadFloat4x4(&e->world);
+		XMMATRIX texTransform = XMLoadFloat4x4(&e->texTransform);
 
 		ObjectConstants objectConstants;
 		XMStoreFloat4x4(&objectConstants.world, XMMatrixTranspose(world));
+		XMStoreFloat4x4(&objectConstants.texTransform, XMMatrixTranspose(texTransform));
 
 		UINT elementIdx = e->objCbIndex;
 		UINT elementByteSize = (sizeof(ObjectConstants) + 255) & ~255;
@@ -135,6 +140,7 @@ void InitDirect3DApp::UpdateMaterialCB(const GameTimer& gt)
 		matConstants.diffuseAlbedo = mat->diffuseAlbedo;
 		matConstants.fresnelR0 = mat->fresnelR0;
 		matConstants.roughness = mat->roughness;
+		matConstants.texture_on = (mat->diffuseSrvHeapIndex == -1 ? 0 : 1);
 
 		UINT elementIdx = mat->matCBIdx;
 		UINT elementByteSize = (sizeof(MatConstants) + 255) & ~255;
@@ -164,8 +170,26 @@ void InitDirect3DApp::UpdatePassCB(const GameTimer& gt)
 	passConstants.lightCount = 1;
 
 	passConstants.lights[0].lightType = 0; // DIR
-	passConstants.lights[0].direction = { 0.5773f, -0.57737f, 0.5773f }; 
+	passConstants.lights[0].direction = { 0.5773f, -0.57737f, 0.5773f };
 	passConstants.lights[0].strength = { 0.6f, 0.6f, 0.6f };
+
+	// --------
+	for (int i = 0; i < 5; ++i)
+	{
+		passConstants.lights[i * 2 + 1].position = XMFLOAT3{ -5.f, 3.5f, -10.f + i * 5.0f };
+		passConstants.lights[i * 2 + 1].lightType = 1;
+		passConstants.lights[i * 2 + 1].strength = { 0.6f, 0.6f, 0.6f };
+		passConstants.lights[i * 2 + 1].fallOffStart = 2;
+		passConstants.lights[i * 2 + 1].fallOffEnd = 5;
+
+		passConstants.lights[i * 2 + 2].position = XMFLOAT3{ 5.f, 3.5f, -10.f + i * 5.0f };
+		passConstants.lights[i * 2 + 2].lightType = 1;
+		passConstants.lights[i * 2 + 2].strength = { 0.6f, 0.6f, 0.6f };
+		passConstants.lights[i * 2 + 1].fallOffStart = 2;
+		passConstants.lights[i * 2 + 2].fallOffEnd = 5;
+	}
+
+	passConstants.lightCount = 11;
 
 	memcpy(&mPassMappedData[0], &passConstants, sizeof(PassConstants));
 }
@@ -199,24 +223,36 @@ void InitDirect3DApp::DrawBegin(const GameTimer& gt)
 
 void InitDirect3DApp::Draw(const GameTimer& gt)
 {
-	mCommandList->SetPipelineState(mPSO.Get());
+
+	// 서술자 렌더링 파이프라인 묶기
+	ID3D12DescriptorHeap* descrpitorHeap[] = { mSrvDescriptorHeap.Get() };
+	mCommandList->SetDescriptorHeaps(_countof(descrpitorHeap), descrpitorHeap);
+
+	// 루트 시그니처, 상수 버퍼뷰 설정
 	mCommandList->SetGraphicsRootSignature(mRootSignature.Get());
 
 	// 공용 상수 버퍼 뷰 설정
 	D3D12_GPU_VIRTUAL_ADDRESS passCBAddress = mPassCB->GetGPUVirtualAddress();
 	mCommandList->SetGraphicsRootConstantBufferView(2, passCBAddress);
 
-	DrawRenderItems(gt);
+	mCommandList->SetPipelineState(mPSOs["opaque"].Get());
+	DrawRenderItems(mItemLayer[(int)RenderLayer::Opaque]);
+
+	mCommandList->SetPipelineState(mPSOs["alphaTest"].Get());
+	DrawRenderItems(mItemLayer[(int)RenderLayer::AlphaTested]);
+
+	mCommandList->SetPipelineState(mPSOs["transparent"].Get());
+	DrawRenderItems(mItemLayer[(int)RenderLayer::Transparent]);
 }
 
-void InitDirect3DApp::DrawRenderItems(const GameTimer& gt)
+void InitDirect3DApp::DrawRenderItems(vector<RenderItem*>& renderItems)
 {
 	UINT objCBByteSize = (sizeof(ObjectConstants) + 255) & ~255;
 	UINT matCBByteSize = (sizeof(MatConstants) + 255) & ~255;
 
-	for (size_t i = 0; i < mRenderItems.size(); i++)
+	for (size_t i = 0; i < renderItems.size(); i++)
 	{
-		auto item = mRenderItems[i].get();
+		auto item = renderItems[i];
 
 		if (item->geometry == nullptr)
 			continue;
@@ -230,12 +266,19 @@ void InitDirect3DApp::DrawRenderItems(const GameTimer& gt)
 		materialCBAdress += item->material->matCBIdx * matCBByteSize;
 		mCommandList->SetGraphicsRootConstantBufferView(1, materialCBAdress);
 
+		// 텍스쳐 버퍼 서술자 설정
+		if (item->material->diffuseSrvHeapIndex != -1)
+		{
+			CD3DX12_GPU_DESCRIPTOR_HANDLE tex(mSrvDescriptorHeap->GetGPUDescriptorHandleForHeapStart());
+			tex.Offset(item->material->diffuseSrvHeapIndex, mCbvSrvDescriptorSize);
+
+			mCommandList->SetGraphicsRootDescriptorTable(3, tex);
+		}
+
 		//vertex
 		mCommandList->IASetVertexBuffers(0, 1, &item->geometry->vertexBufferView);
-
 		//index
 		mCommandList->IASetIndexBuffer(&item->geometry->indexBufferView);
-
 		//topology
 		mCommandList->IASetPrimitiveTopology(item->primitiveTopology);
 
@@ -304,6 +347,68 @@ void InitDirect3DApp::OnMouseMove(WPARAM btnState, int x, int y)
 #pragma endregion
 
 
+void InitDirect3DApp::LoadTextures()
+{
+	{
+		auto brickTex = make_unique<TextureInfo>();
+		brickTex->name = "bricksTex";
+		brickTex->fileName = L"../Textures/bricks.dds";
+		ThrowIfFailed(DirectX::CreateDDSTextureFromFile12
+		(
+			md3dDevice.Get(),
+			mCommandList.Get(),
+			brickTex->fileName.c_str(),
+			brickTex->resource,
+			brickTex->uploadHeap
+		));
+		mTextures[brickTex->name] = move(brickTex);
+	}
+	{
+		auto tileTex = make_unique<TextureInfo>();
+		tileTex->name = "tileTex";
+		tileTex->fileName = L"../Textures/tile.dds";
+		ThrowIfFailed(DirectX::CreateDDSTextureFromFile12
+		(
+			md3dDevice.Get(),
+			mCommandList.Get(),
+			tileTex->fileName.c_str(),
+			tileTex->resource,
+			tileTex->uploadHeap
+		));
+		mTextures[tileTex->name] = move(tileTex);
+
+	}
+	{
+		auto stoneTex = make_unique<TextureInfo>();
+		stoneTex->name = "stoneTex";
+		stoneTex->fileName = L"../Textures/stone.dds";
+		ThrowIfFailed(DirectX::CreateDDSTextureFromFile12
+		(
+			md3dDevice.Get(),
+			mCommandList.Get(),
+			stoneTex->fileName.c_str(),
+			stoneTex->resource,
+			stoneTex->uploadHeap
+		));
+		mTextures[stoneTex->name] = move(stoneTex);
+	}
+	{
+		auto fenceTex = make_unique<TextureInfo>();
+		fenceTex->name = "fenceTex";
+		fenceTex->fileName = L"../Textures/WireFence.dds";
+		ThrowIfFailed(DirectX::CreateDDSTextureFromFile12
+		(
+			md3dDevice.Get(),
+			mCommandList.Get(),
+			fenceTex->fileName.c_str(),
+			fenceTex->resource,
+			fenceTex->uploadHeap
+		));
+		mTextures[fenceTex->name] = move(fenceTex);
+	}
+}
+
+
 void InitDirect3DApp::BuildBoxGeometry()
 {
 	GeometryGenerator geoGen;
@@ -317,6 +422,7 @@ void InitDirect3DApp::BuildBoxGeometry()
 	{
 		vertices[k].pos = box.Vertices[i].Position;
 		vertices[k].normal = box.Vertices[i].Normal;
+		vertices[k].uv = box.Vertices[i].TexC;
 	}
 
 	//인덱스 정보
@@ -393,6 +499,7 @@ void InitDirect3DApp::BuildGridGeometry()
 	for (size_t i = 0; i < grid.Vertices.size(); ++i, ++k)
 	{
 		vertices[k].pos = grid.Vertices[i].Position;
+		vertices[k].uv = grid.Vertices[i].TexC;
 		vertices[k].normal = grid.Vertices[i].Normal;
 	}
 
@@ -468,6 +575,7 @@ void InitDirect3DApp::BuildSphereGeometry()
 	for (size_t i = 0; i < sphere.Vertices.size(); ++i, ++k)
 	{
 		vertices[k].pos = sphere.Vertices[i].Position;
+		vertices[k].uv = sphere.Vertices[i].TexC;
 		vertices[k].normal = sphere.Vertices[i].Normal;
 	}
 
@@ -544,6 +652,7 @@ void InitDirect3DApp::BuildCylinderGeometry()
 	for (size_t i = 0; i < cylinder.Vertices.size(); ++i, ++k)
 	{
 		vertices[k].pos = cylinder.Vertices[i].Position;
+		vertices[k].uv = cylinder.Vertices[i].TexC;
 		vertices[k].normal = cylinder.Vertices[i].Normal;
 	}
 
@@ -701,7 +810,7 @@ void InitDirect3DApp::BuildMaterials()
 	{
 		auto bricks0 = make_unique<MaterialInfo>();
 		bricks0->name = "bricks0";
-		bricks0->matCBIdx = 0;
+		bricks0->matCBIdx = bricks0->diffuseSrvHeapIndex = 0;
 		bricks0->diffuseAlbedo = XMFLOAT4(Colors::ForestGreen);
 		bricks0->fresnelR0 = XMFLOAT3(0.02f, 0.02f, 0.02f);
 		bricks0->roughness = 0.1f;
@@ -711,6 +820,7 @@ void InitDirect3DApp::BuildMaterials()
 		auto stone0 = make_unique<MaterialInfo>();
 		stone0->name = "stone0";
 		stone0->matCBIdx = 1;
+		stone0->diffuseSrvHeapIndex = 2;
 		stone0->diffuseAlbedo = XMFLOAT4(Colors::LightSteelBlue);
 		stone0->fresnelR0 = XMFLOAT3(0.05f, 0.05f, 0.05f);
 		stone0->roughness = 0.3f;
@@ -720,6 +830,7 @@ void InitDirect3DApp::BuildMaterials()
 		auto tile0 = make_unique<MaterialInfo>();
 		tile0->name = "tile0";
 		tile0->matCBIdx = 2;
+		tile0->diffuseSrvHeapIndex = 1;
 		tile0->diffuseAlbedo = XMFLOAT4(Colors::LightGray);
 		tile0->fresnelR0 = XMFLOAT3(0.02f, 0.02f, 0.02f);
 		tile0->roughness = 0.2f;
@@ -729,21 +840,33 @@ void InitDirect3DApp::BuildMaterials()
 		auto skull = make_unique<MaterialInfo>();
 		skull->name = "skull";
 		skull->matCBIdx = 3;
-		skull->diffuseAlbedo = XMFLOAT4(Colors::White);
+		skull->diffuseAlbedo = XMFLOAT4(1.0f, 1.0f, 1.0f, 0.5f);
 		skull->fresnelR0 = XMFLOAT3(0.05f, 0.05f, 0.05f);
 		skull->roughness = 0.3f;
 		mMateirals[skull->name] = move(skull);
 	}
+	{
+		auto fence = make_unique<MaterialInfo>();
+		fence->name = "fence";
+		fence->matCBIdx = 4;
+		fence->diffuseSrvHeapIndex = 3;
+		fence->diffuseAlbedo = XMFLOAT4(Colors::White);
+		fence->fresnelR0 = XMFLOAT3(0.02f, 0.02f, 0.02f);
+		fence->roughness = 0.2f;
+		mMateirals[fence->name] = move(fence);
+	}
 }
+
 void InitDirect3DApp::BuildRenderItems()
 {
 	{
 		auto box = make_unique<RenderItem>();
 		XMStoreFloat4x4(&box->world, XMMatrixScaling(2.f, 2.f, 2.f) * XMMatrixTranslation(0.f, 0.5f, 0.f));
 		box->objCbIndex = 0;
-		box->material = mMateirals["stone0"].get();
+		box->material = mMateirals["fence"].get();
 		box->geometry = mGeometries["Box"].get();
 		box->primitiveTopology = D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
+		mItemLayer[(int)RenderLayer::AlphaTested].push_back(box.get());
 		mRenderItems.push_back(move(box));
 	}
 
@@ -753,7 +876,9 @@ void InitDirect3DApp::BuildRenderItems()
 		grid->objCbIndex = 1;
 		grid->geometry = mGeometries["Grid"].get();
 		grid->material = mMateirals["tile0"].get();
+		XMStoreFloat4x4(&grid->texTransform, XMMatrixScaling(8.f, 8.f, 1.f));
 		grid->primitiveTopology = D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
+		mItemLayer[(int)RenderLayer::Opaque].push_back(grid.get());
 		mRenderItems.push_back(move(grid));
 	}
 
@@ -764,19 +889,20 @@ void InitDirect3DApp::BuildRenderItems()
 		skull->material = mMateirals["skull"].get();
 		skull->geometry = mGeometries["Skull"].get();
 		skull->primitiveTopology = D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
+		mItemLayer[(int)RenderLayer::Transparent].push_back(skull.get());
 		mRenderItems.push_back(move(skull));
 	}
 
 	UINT objCBIdx = 6;
-	for (int i = 0; i < 6; ++i)
+	for (int i = 0; i < 5; ++i)
 	{
 		auto leftCylinder = make_unique<RenderItem>();
 		auto rightCylinder = make_unique<RenderItem>();
 		auto leftSphere = make_unique<RenderItem>();
 		auto rightSphere = make_unique<RenderItem>();
 
-		XMMATRIX leftCylWorld = XMMatrixTranslation(-5.f, 1.5f,    -10.f + i * 5.0f);
-		XMMATRIX rightCylWorld = XMMatrixTranslation(5.f, 1.5f,    -10.f + i * 5.0f);
+		XMMATRIX leftCylWorld = XMMatrixTranslation(-5.f, 1.5f, -10.f + i * 5.0f);
+		XMMATRIX rightCylWorld = XMMatrixTranslation(5.f, 1.5f, -10.f + i * 5.0f);
 		XMMATRIX leftSphereWorld = XMMatrixTranslation(-5.f, 3.5f, -10.f + i * 5.0f);
 		XMMATRIX rightSphereWorld = XMMatrixTranslation(5.f, 3.5f, -10.f + i * 5.0f);
 
@@ -784,24 +910,28 @@ void InitDirect3DApp::BuildRenderItems()
 		leftCylinder->objCbIndex = objCBIdx++;
 		leftCylinder->geometry = mGeometries["Cylinder"].get();
 		leftCylinder->material = mMateirals["bricks0"].get();
+		mItemLayer[(int)RenderLayer::Opaque].push_back(leftCylinder.get());
 		mRenderItems.push_back(move(leftCylinder));
 
 		XMStoreFloat4x4(&rightCylinder->world, rightCylWorld);
 		rightCylinder->objCbIndex = objCBIdx++;
 		rightCylinder->geometry = mGeometries["Cylinder"].get();
 		rightCylinder->material = mMateirals["bricks0"].get();
+		mItemLayer[(int)RenderLayer::Opaque].push_back(rightCylinder.get());
 		mRenderItems.push_back(move(rightCylinder));
 
 		XMStoreFloat4x4(&leftSphere->world, leftSphereWorld);
 		leftSphere->objCbIndex = objCBIdx++;
 		leftSphere->geometry = mGeometries["Sphere"].get();
 		leftSphere->material = mMateirals["stone0"].get();
+		mItemLayer[(int)RenderLayer::Opaque].push_back(leftSphere.get());
 		mRenderItems.push_back(move(leftSphere));
 
 		XMStoreFloat4x4(&rightSphere->world, rightSphereWorld);
 		rightSphere->objCbIndex = objCBIdx++;
 		rightSphere->geometry = mGeometries["Sphere"].get();
 		rightSphere->material = mMateirals["stone0"].get();
+		mItemLayer[(int)RenderLayer::Opaque].push_back(rightSphere.get());
 		mRenderItems.push_back(move(rightSphere));
 	}
 }
@@ -813,14 +943,29 @@ void InitDirect3DApp::BuildInputLayout()
 	{
 		// Shader와 연결됨
 		{"POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0}, // 0 ~ 11 (12)
-		{"NORMAL", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 12, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0} // 12 ~ 23 (12)
+		{"NORMAL", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 12, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0}, // 12 ~ 23 (12)
+		{"TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT, 0, 24, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0} // 24 ~ 31 (8)
 	};
 }
 
 void InitDirect3DApp::BuildShader()
 {
-	mvsByteCode = d3dUtil::CompileShader(L"Color.hlsl", nullptr, "VS", "vs_5_0");
-	mpsByteCode = d3dUtil::CompileShader(L"Color.hlsl", nullptr, "PS", "ps_5_0");
+	const D3D_SHADER_MACRO defines[] =
+	{
+		"FOG", "1",
+		NULL, NULL
+	};
+
+	const D3D_SHADER_MACRO alphaTestDefines[] =
+	{
+		"FOG", "1",
+		"ALPHA_TEST", "1",
+		NULL, NULL
+	};
+
+	mShaders["standardVS"] = d3dUtil::CompileShader(L"Color.hlsl", nullptr, "VS", "vs_5_0");
+	mShaders["opaquePS"] = d3dUtil::CompileShader(L"Color.hlsl", defines, "PS", "ps_5_0");
+	mShaders["alphaTestedPS"] = d3dUtil::CompileShader(L"Color.hlsl", alphaTestDefines, "PS", "ps_5_0");
 }
 
 void InitDirect3DApp::BuildConstantBuffers()
@@ -900,12 +1045,20 @@ void InitDirect3DApp::BuildConstantBuffers()
 
 void InitDirect3DApp::BuildRootSignature()
 {
-	CD3DX12_ROOT_PARAMETER param[3];
+	CD3DX12_DESCRIPTOR_RANGE texTable[]
+	{
+		CD3DX12_DESCRIPTOR_RANGE(D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 1, 0), // t0
+	};
+
+	CD3DX12_ROOT_PARAMETER param[4];
 	param[0].InitAsConstantBufferView(0);	// 0번 -> b0 -> CBV (개별)
 	param[1].InitAsConstantBufferView(1);	// 1번 -> b1 -> CBV (개별 머티리얼)
 	param[2].InitAsConstantBufferView(2);	// 2번 -> b2 -> CBV (공용)
+	param[3].InitAsDescriptorTable(_countof(texTable), texTable);	// 2번 -> b2 -> CBV (공용)
 
-	D3D12_ROOT_SIGNATURE_DESC sigDesc = CD3DX12_ROOT_SIGNATURE_DESC(_countof(param), param);
+	D3D12_STATIC_SAMPLER_DESC samplerDesc = CD3DX12_STATIC_SAMPLER_DESC(0);
+
+	D3D12_ROOT_SIGNATURE_DESC sigDesc = CD3DX12_ROOT_SIGNATURE_DESC(_countof(param), param, 1, &samplerDesc);
 	sigDesc.Flags = D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT;
 
 	ComPtr<ID3DBlob> blobSignature;
@@ -916,18 +1069,67 @@ void InitDirect3DApp::BuildRootSignature()
 		IID_PPV_ARGS(&mRootSignature));
 }
 
+void InitDirect3DApp::BuildDescriptorHeaps()
+{
+	mCbvSrvDescriptorSize = md3dDevice->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+
+	// srv 힙
+	D3D12_DESCRIPTOR_HEAP_DESC srvHeapDesc = {};
+	srvHeapDesc.NumDescriptors = 4;
+	srvHeapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
+	srvHeapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
+	md3dDevice->CreateDescriptorHeap(&srvHeapDesc, IID_PPV_ARGS(&mSrvDescriptorHeap));
+
+	CD3DX12_CPU_DESCRIPTOR_HANDLE hDescriptor(mSrvDescriptorHeap->GetCPUDescriptorHandleForHeapStart());
+
+	auto bricksTex = mTextures["bricksTex"]->resource;
+	auto tileTex = mTextures["tileTex"]->resource;
+	auto stoneTex = mTextures["stoneTex"]->resource;
+	auto fenceTex = mTextures["fenceTex"]->resource;
+
+	D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
+	srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+	srvDesc.Format = bricksTex->GetDesc().Format;
+	srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+	srvDesc.Texture2D.MostDetailedMip = 0;
+	srvDesc.Texture2D.MipLevels = bricksTex->GetDesc().MipLevels;
+	srvDesc.Texture2D.ResourceMinLODClamp = 0.0f;
+	md3dDevice->CreateShaderResourceView(bricksTex.Get(), &srvDesc, hDescriptor);
+
+	hDescriptor.Offset(1, mCbvSrvDescriptorSize);	// 다음 Descriptor
+
+	srvDesc.Format = tileTex->GetDesc().Format;
+	srvDesc.Texture2D.MipLevels = tileTex->GetDesc().MipLevels;
+	md3dDevice->CreateShaderResourceView(tileTex.Get(), &srvDesc, hDescriptor);
+
+	hDescriptor.Offset(1, mCbvSrvDescriptorSize);	// 다음 Descriptor
+
+	srvDesc.Format = stoneTex->GetDesc().Format;
+	srvDesc.Texture2D.MipLevels = stoneTex->GetDesc().MipLevels;
+	md3dDevice->CreateShaderResourceView(stoneTex.Get(), &srvDesc, hDescriptor);
+
+	hDescriptor.Offset(1, mCbvSrvDescriptorSize);	// 다음 Descriptor
+
+	srvDesc.Format = fenceTex->GetDesc().Format;
+	srvDesc.Texture2D.MipLevels = fenceTex->GetDesc().MipLevels;
+	md3dDevice->CreateShaderResourceView(fenceTex.Get(), &srvDesc, hDescriptor);
+}
+
 void InitDirect3DApp::BuildPSO()
 {
+	// 불투명 오브젝트 렌더링 파이프라인 상태
 	D3D12_GRAPHICS_PIPELINE_STATE_DESC psoDesc;
 	ZeroMemory(&psoDesc, sizeof(D3D12_GRAPHICS_PIPELINE_STATE_DESC));
 
 	psoDesc.InputLayout = { mInputLayout.data(), (UINT)mInputLayout.size() };
 	psoDesc.pRootSignature = mRootSignature.Get();
-	psoDesc.VS = {
-		reinterpret_cast<BYTE*>(mvsByteCode->GetBufferPointer()), mvsByteCode->GetBufferSize()
+	psoDesc.VS =
+	{
+		reinterpret_cast<BYTE*>(mShaders["standardVS"]->GetBufferPointer()), mShaders["standardVS"]->GetBufferSize()
 	};
-	psoDesc.PS = {
-		reinterpret_cast<BYTE*>(mpsByteCode->GetBufferPointer()), mpsByteCode->GetBufferSize()
+	psoDesc.PS =
+	{
+		reinterpret_cast<BYTE*>(mShaders["opaquePS"]->GetBufferPointer()), mShaders["opaquePS"]->GetBufferSize()
 	};
 
 	psoDesc.RasterizerState = CD3DX12_RASTERIZER_DESC(D3D12_DEFAULT); // Default로 하면 기본값으로 세팅
@@ -941,5 +1143,37 @@ void InitDirect3DApp::BuildPSO()
 	psoDesc.SampleDesc.Quality = m4xMsaaState ? (m4xMsaaQuality - 1) : 0;
 	psoDesc.DSVFormat = mDepthStencilFormat;
 
-	ThrowIfFailed(md3dDevice->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&mPSO)));
+	ThrowIfFailed(md3dDevice->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&mPSOs["opaque"])));
+
+
+	// 불투명 오브젝트 렌더링 파이프라인 상태
+	D3D12_GRAPHICS_PIPELINE_STATE_DESC transDesc = psoDesc;
+	D3D12_RENDER_TARGET_BLEND_DESC transBlendDesc;
+
+	transBlendDesc.BlendEnable = true;
+	transBlendDesc.LogicOpEnable = false;
+	transBlendDesc.SrcBlend = D3D12_BLEND_SRC_ALPHA;	// 내 원본을 투명하게 처리
+	transBlendDesc.DestBlend = D3D12_BLEND_INV_SRC_ALPHA;	// 렌더 타겟은 알파 X
+	transBlendDesc.BlendOp = D3D12_BLEND_OP_ADD;
+	transBlendDesc.SrcBlendAlpha = D3D12_BLEND_ONE;
+	transBlendDesc.DestBlendAlpha = D3D12_BLEND_ZERO;
+	transBlendDesc.BlendOpAlpha = D3D12_BLEND_OP_ADD;
+	transBlendDesc.LogicOp = D3D12_LOGIC_OP_NOOP;
+	transBlendDesc.RenderTargetWriteMask = D3D10_COLOR_WRITE_ENABLE_ALL;
+
+	transDesc.BlendState.RenderTarget[0] = transBlendDesc;
+
+	ThrowIfFailed(md3dDevice->CreateGraphicsPipelineState(&transDesc, IID_PPV_ARGS(&mPSOs["transparent"])));
+
+
+	// 알파 테스트 오브젝트 렌더링 파이프라인 상태
+	D3D12_GRAPHICS_PIPELINE_STATE_DESC alphaDesc = psoDesc;
+	alphaDesc.PS =
+	{
+		reinterpret_cast<BYTE*>(mShaders["alphaTestedPS"]->GetBufferPointer()), mShaders["alphaTestedPS"]->GetBufferSize()
+	};
+
+	alphaDesc.RasterizerState.CullMode = D3D12_CULL_MODE_NONE;
+	ThrowIfFailed(md3dDevice->CreateGraphicsPipelineState(&alphaDesc, IID_PPV_ARGS(&mPSOs["alphaTest"])));
+
 }

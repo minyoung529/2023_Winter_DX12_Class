@@ -1,6 +1,8 @@
 #ifndef _PARAMS_HLSLI
 #define _PARAMS_HLSLI
 
+#define MAXLIGHTS 16
+
 struct Light
 {
     int lightType;
@@ -23,6 +25,7 @@ struct Material
 cbuffer cbPerObject : register(b0)
 {
     float4x4 gWorld;
+    float4x4 gTexTransform;
 }
 
 cbuffer cbPerMaterial : register(b1)
@@ -30,6 +33,8 @@ cbuffer cbPerMaterial : register(b1)
     float4 gDiffuseAlbedo;
     float3 gFresnelR0;
     float gRoughness;
+    int gTex_On;
+    float3 g_texPadding;
 }
 
 cbuffer cbPass : register(b2)
@@ -43,6 +48,11 @@ cbuffer cbPass : register(b2)
     float4 gAmbiendLight;
     float3 gEyePosW;
     int gLightCount;
-    Light gLights[10];
+    Light gLights[MAXLIGHTS];
 }
+
+Texture2D gTexture_0 : register(t0);
+
+SamplerState gSampler_0 : register(s0);
+
 #endif
