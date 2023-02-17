@@ -13,7 +13,7 @@ struct VertexIn
 struct VertexOut
 {
     float4 PosH : SV_POSITION;
-    float3 PosL : POSITION;
+    float3 PosL : POSITION; 
 };
 
 VertexOut VS(VertexIn vin)

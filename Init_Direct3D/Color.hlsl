@@ -6,19 +6,20 @@
 
 struct VertexIn
 {
-    float3 PosL : POSITION; // local
-    float3 NormalL : NORMAL;
-    float3 Uv : TEXCOORD;
-    float3 Tangent : TANGENT;
+    float3 PosL         : POSITION; // local
+    float3 NormalL      : NORMAL;
+    float3 Uv           : TEXCOORD;
+    float3 Tangent      : TANGENT;
 };
 
 struct VertexOut
 {
-    float4 PosH : SV_POSITION;
-    float3 PosW : POSITION;
-    float3 NormalW : NORMAL;
-    float3 TangentW : TANGENT;
-    float2 Uv : TEXCOORD;
+    float4 PosH         : SV_POSITION;
+    float4 ShadowPosH   : POSITION0;
+    float3 PosW         : POSITION1;
+    float3 NormalW      : NORMAL;
+    float3 TangentW     : TANGENT;
+    float2 Uv           : TEXCOORD;
 };
 
 // Vertex Shader
@@ -36,6 +37,10 @@ VertexOut VS(VertexIn vin)
     
     float4 Uv = mul(float4(vin.Uv, 0.0f), gTexTransform);
     vout.Uv = Uv.xy;
+    
+    vout.ShadowPosH = mul(posW, gShadowTransform);
+    
+    
     return vout;
 }
 
@@ -68,11 +73,14 @@ float4 PS(VertexOut pin) : SV_Target // Default Target
     
     float3 toEyeW = normalize(gEyePosW - pin.PosW);
     float4 ambient = gAmbiendLight * diffuseAlbedo;
+    
+    float shadowFactor = CalcShadowFactor(pin.ShadowPosH);
+    
     const float shininess = 1.0f - gRoughness;
     
     Material mat = { diffuseAlbedo, gFresnelR0, shininess };
     
-    float4 directLight = ComputeLighting(gLights, gLightCount, mat, pin.PosW, bumpedNormalW, toEyeW);
+    float4 directLight = ComputeLighting(gLights, gLightCount, mat, pin.PosW, bumpedNormalW, toEyeW, shadowFactor);
     float4 litColor = ambient + directLight;
     
     // 환경 매핑

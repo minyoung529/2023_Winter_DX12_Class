@@ -43,6 +43,13 @@ bool InitDirect3DApp::Initialize()
 	// 초기화 명령들을 준비하기 위해 명령 목록 재설정
 	mCommandList->Reset(mDirectCmdListAlloc.Get(), nullptr);
 
+	// 경계구 세팅
+	mSceneBounds.Center = XMFLOAT3(0.f, 0.f, 0.f);
+	mSceneBounds.Radius = sqrtf(10.0f * 10.0f + 15.0f * 15.0f);
+
+	// 그림자 맵 생성
+	mShadowMap = make_unique<ShadowMap>(md3dDevice.Get(), 2048, 2048);
+
 	// 카메라 초기 위치 세팅
 	mCamera.SetPosition(0.0f, 2.0f, -15.0f);
 
@@ -56,6 +63,7 @@ bool InitDirect3DApp::Initialize()
 	BuildGridGeometry();
 	BuildSphereGeometry();
 	BuildCylinderGeometry();
+	BuildQuadGeometry();
 	BuildSkullGeometry();
 
 	// 재질 생성
@@ -97,7 +105,9 @@ void InitDirect3DApp::Update(const GameTimer& gt)
 	UpdateCamera(gt);
 	UpdateObjectCBs(gt);
 	UpdateMaterialCB(gt);
+	UpdateShadowTransform(gt);
 	UpdatePassCB(gt);
+	UpdateShadowPassCB(gt);
 }
 
 void InitDirect3DApp::UpdateCamera(const GameTimer& gt)
@@ -157,6 +167,55 @@ void InitDirect3DApp::UpdateMaterialCB(const GameTimer& gt)
 	}
 }
 
+void InitDirect3DApp::UpdateShadowTransform(const GameTimer& gt)
+{
+	// 광원 회전
+	mLightRotationAngle += 1.f * gt.DeltaTime();
+	XMMATRIX R = XMMatrixRotationY(mLightRotationAngle);
+	XMVECTOR lightDir = XMLoadFloat3(&mBaseLightDirection);
+	lightDir = XMVector3TransformNormal(lightDir, R);
+	XMStoreFloat3(&mRotatedLightDirection, lightDir);
+
+	// 광원 공간 행렬
+	XMVECTOR lightPos = -2.0f * mSceneBounds.Radius * lightDir;
+	XMVECTOR targetPos = XMLoadFloat3(&mSceneBounds.Center);
+	XMVECTOR lightUp = XMVectorSet(0.f, 1.f, 0.f, 0.f);
+
+	XMMATRIX lightView = XMMatrixLookAtLH(lightPos, targetPos, lightUp);
+
+	XMFLOAT3 sphereCenterLS;
+	XMStoreFloat3(&sphereCenterLS, XMVector3Transform(targetPos, lightView));
+
+	float l = sphereCenterLS.x - mSceneBounds.Radius;	// left
+	float b = sphereCenterLS.y - mSceneBounds.Radius;	// bottom
+	float n = sphereCenterLS.z - mSceneBounds.Radius;	// near
+	float r = sphereCenterLS.x + mSceneBounds.Radius;	// right
+	float t = sphereCenterLS.y + mSceneBounds.Radius;	// top
+	float f = sphereCenterLS.z + mSceneBounds.Radius;	// far
+
+	// NDC 공간
+	XMMATRIX lightProj = XMMatrixOrthographicOffCenterLH(l, r, b, t, n, f);
+
+	// NDC spacle [-1, +1 ]^2 => texture space [0, 1]^2
+	// 텍스쳐 변환행렬
+	XMMATRIX T
+	(
+		0.5f, 0.f, 0.f, 0.f,
+		0.f, -0.5f, 0.f, 0.f,
+		0.f, 0.f, 1.f, 0.f,
+		0.5f, 0.5f, 0.f, 1.f
+	);
+
+	XMMATRIX S = lightView * lightProj * T;
+
+	mLightNearZ = n;
+	mLightFarZ = f;
+	XMStoreFloat3(&mLightPosW, lightPos);
+	XMStoreFloat4x4(&mLightView, lightView);
+	XMStoreFloat4x4(&mLightProj, lightProj);
+	XMStoreFloat4x4(&mShadowTransform, S);
+}
+
 void InitDirect3DApp::UpdatePassCB(const GameTimer& gt)
 {
 	PassConstants passConstants;
@@ -166,19 +225,24 @@ void InitDirect3DApp::UpdatePassCB(const GameTimer& gt)
 	XMMATRIX invView = XMMatrixInverse(&XMMatrixDeterminant(view), view);
 	XMMATRIX invProj = XMMatrixInverse(&XMMatrixDeterminant(proj), proj);
 	XMMATRIX viewProj = XMMatrixMultiply(view, proj);
+	XMMATRIX invViewProj = XMMatrixInverse(&XMMatrixDeterminant(viewProj), viewProj);
+
+	XMMATRIX shadowTransform = XMLoadFloat4x4(&mShadowTransform);
 
 	XMStoreFloat4x4(&passConstants.view, XMMatrixTranspose(view));
 	XMStoreFloat4x4(&passConstants.proj, XMMatrixTranspose(proj));
 	XMStoreFloat4x4(&passConstants.invView, XMMatrixTranspose(invView));
 	XMStoreFloat4x4(&passConstants.invProj, XMMatrixTranspose(invProj));
 	XMStoreFloat4x4(&passConstants.viewProj, XMMatrixTranspose(viewProj));
+	XMStoreFloat4x4(&passConstants.inViewProj, XMMatrixTranspose(invViewProj));
+	XMStoreFloat4x4(&passConstants.shadowTransform, XMMatrixTranspose(shadowTransform));
 
 	passConstants.ambientColor = { 0.25f, 0.25f, 0.35f, 1.0f };
 	passConstants.eyePosW = mCamera.GetPosition3f();
 	passConstants.lightCount = 1;
 
 	passConstants.lights[0].lightType = 0; // DIR
-	passConstants.lights[0].direction = { 0.5773f, -0.57737f, 0.5773f };
+	passConstants.lights[0].direction = mRotatedLightDirection;
 	passConstants.lights[0].strength = { 0.6f, 0.6f, 0.6f };
 
 	/*
@@ -203,31 +267,39 @@ void InitDirect3DApp::UpdatePassCB(const GameTimer& gt)
 	memcpy(&mPassMappedData[0], &passConstants, sizeof(PassConstants));
 }
 
+void InitDirect3DApp::UpdateShadowPassCB(const GameTimer& gt)
+{
+	PassConstants shadowPass;
+	XMMATRIX view = XMLoadFloat4x4(&mLightView);
+	XMMATRIX proj = XMLoadFloat4x4(&mLightProj);
+
+	XMMATRIX invView = XMMatrixInverse(&XMMatrixDeterminant(view), view);
+	XMMATRIX invProj = XMMatrixInverse(&XMMatrixDeterminant(proj), proj);
+	XMMATRIX viewProj = XMMatrixMultiply(view, proj);
+	XMMATRIX invViewProj = XMMatrixInverse(&XMMatrixDeterminant(viewProj), viewProj);
+
+	XMStoreFloat4x4(&shadowPass.view, XMMatrixTranspose(view));
+	XMStoreFloat4x4(&shadowPass.invView, XMMatrixTranspose(invView));
+	XMStoreFloat4x4(&shadowPass.proj, XMMatrixTranspose(proj));
+	XMStoreFloat4x4(&shadowPass.invProj, XMMatrixTranspose(invProj));
+	XMStoreFloat4x4(&shadowPass.viewProj, XMMatrixTranspose(viewProj));
+	XMStoreFloat4x4(&shadowPass.inViewProj, XMMatrixTranspose(invViewProj));
+
+	shadowPass.eyePosW = mLightPosW;
+
+	UINT passCBByteSize = d3dUtil::CalcConstantBufferByteSize(sizeof(PassConstants));
+	memcpy(&mPassMappedData[passCBByteSize], &shadowPass, sizeof(PassConstants));
+}
+
 void InitDirect3DApp::DrawBegin(const GameTimer& gt)
 {
 	// Reuse the memory associated with command recording.
-// We can only reset when the associated command lists have finished execution on the GPU.
+	// We can only reset when the associated command lists have finished execution on the GPU.
 	ThrowIfFailed(mDirectCmdListAlloc->Reset());
 
 	// A command list can be reset after it has been added to the command queue via ExecuteCommandList.
 	// Reusing the command list reuses memory.
 	ThrowIfFailed(mCommandList->Reset(mDirectCmdListAlloc.Get(), nullptr));
-
-	// Indicate a state transition on the resource usage.
-	mCommandList->ResourceBarrier(1, &CD3DX12_RESOURCE_BARRIER::Transition(CurrentBackBuffer(),
-		D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_RENDER_TARGET));
-
-	// Set the viewport and scissor rect.  This needs to be reset whenever the command list is reset.
-	mCommandList->RSSetViewports(1, &mScreenViewport);
-	mCommandList->RSSetScissorRects(1, &mScissorRect);
-
-	// Clear the back buffer and depth buffer.
-	mCommandList->ClearRenderTargetView(CurrentBackBufferView(), Colors::Bisque, 0, nullptr);
-	mCommandList->ClearDepthStencilView(DepthStencilView(), D3D12_CLEAR_FLAG_DEPTH | D3D12_CLEAR_FLAG_STENCIL, 1.0f, 0, 0, nullptr);
-
-	// Specify the buffers we are going to render to.
-	// 출력 병합 (마지막 단계)
-	mCommandList->OMSetRenderTargets(1, &CurrentBackBufferView(), true, &DepthStencilView());
 }
 
 void InitDirect3DApp::Draw(const GameTimer& gt)
@@ -240,6 +312,25 @@ void InitDirect3DApp::Draw(const GameTimer& gt)
 	// 루트 시그니처, 상수 버퍼뷰 설정
 	mCommandList->SetGraphicsRootSignature(mRootSignature.Get());
 
+	DrawSceneToShadowMap();
+
+	// 오브젝트 렌더링
+	mCommandList->RSSetViewports(1, &mScreenViewport);
+	mCommandList->RSSetScissorRects(1, &mScissorRect);
+
+	mCommandList->ResourceBarrier(1, &CD3DX12_RESOURCE_BARRIER::Transition(CurrentBackBuffer(),
+		D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_RENDER_TARGET));
+
+	// Clear the back buffer and depth buffer.
+	mCommandList->ClearRenderTargetView(CurrentBackBufferView(), Colors::Bisque, 0, nullptr);
+	mCommandList->ClearDepthStencilView(DepthStencilView(), D3D12_CLEAR_FLAG_DEPTH | D3D12_CLEAR_FLAG_STENCIL, 1.0f, 0, 0, nullptr);
+
+	// Specify the buffers we are going to render to.
+	// 출력 병합 (마지막 단계)
+	mCommandList->OMSetRenderTargets(1, &CurrentBackBufferView(), true, &DepthStencilView());
+
+	//------
+
 	// 공용 상수 버퍼 뷰 설정
 	D3D12_GPU_VIRTUAL_ADDRESS passCBAddress = mPassCB->GetGPUVirtualAddress();
 	mCommandList->SetGraphicsRootConstantBufferView(2, passCBAddress);
@@ -247,8 +338,9 @@ void InitDirect3DApp::Draw(const GameTimer& gt)
 	// 스카이박스 텍스쳐 
 	CD3DX12_GPU_DESCRIPTOR_HANDLE skyTextureDescriptor(mSrvDescriptorHeap->GetGPUDescriptorHandleForHeapStart());
 	skyTextureDescriptor.Offset(mSkyboxTexHeapIndex, mCbvSrvDescriptorSize);
-
 	mCommandList->SetGraphicsRootDescriptorTable(3, skyTextureDescriptor);
+
+	mCommandList->SetGraphicsRootDescriptorTable(6, mShadowMapSrv);
 
 	mCommandList->SetPipelineState(mPSOs["opaque"].Get());
 	DrawRenderItems(mItemLayer[(int)RenderLayer::Opaque]);
@@ -259,9 +351,11 @@ void InitDirect3DApp::Draw(const GameTimer& gt)
 	mCommandList->SetPipelineState(mPSOs["transparent"].Get());
 	DrawRenderItems(mItemLayer[(int)RenderLayer::Transparent]);
 
+	mCommandList->SetPipelineState(mPSOs["debug"].Get());
+	DrawRenderItems(mItemLayer[(int)RenderLayer::Debug]);
+
 	mCommandList->SetPipelineState(mPSOs["skybox"].Get());
 	DrawRenderItems(mItemLayer[(int)RenderLayer::SkyBox]);
-
 }
 
 void InitDirect3DApp::DrawRenderItems(vector<RenderItem*>& renderItems)
@@ -314,6 +408,31 @@ void InitDirect3DApp::DrawRenderItems(vector<RenderItem*>& renderItems)
 		// Render
 		mCommandList->DrawIndexedInstanced(item->geometry->indexCount, 1, 0, 0, 0);
 	}
+}
+
+void InitDirect3DApp::DrawSceneToShadowMap()
+{
+	// 오브젝트 렌더링
+	mCommandList->RSSetViewports(1, &mShadowMap->Viewport());
+	mCommandList->RSSetScissorRects(1, &mShadowMap->ScissorRect());
+
+	mCommandList->ResourceBarrier(1, &CD3DX12_RESOURCE_BARRIER::Transition(mShadowMap->Resource(),
+		D3D12_RESOURCE_STATE_GENERIC_READ, D3D12_RESOURCE_STATE_DEPTH_WRITE));
+
+	mCommandList->ClearDepthStencilView(mShadowMap->Dsv(), D3D12_CLEAR_FLAG_DEPTH | D3D12_CLEAR_FLAG_STENCIL, 1.0f, 0, 0, nullptr);
+
+	// 렌더 타겟이 X
+	mCommandList->OMSetRenderTargets(0, nullptr, false, &mShadowMap->Dsv());
+
+	UINT passCBByteSize = d3dUtil::CalcConstantBufferByteSize(sizeof(PassConstants));
+	D3D12_GPU_VIRTUAL_ADDRESS passCBAddress = mPassCB->GetGPUVirtualAddress() + passCBByteSize;
+
+	mCommandList->SetGraphicsRootConstantBufferView(2, passCBAddress);
+	mCommandList->SetPipelineState(mPSOs["shadow"].Get());
+	DrawRenderItems(mItemLayer[(int)RenderLayer::Opaque]);
+
+	mCommandList->ResourceBarrier(1, &CD3DX12_RESOURCE_BARRIER::Transition(mShadowMap->Resource(),
+		D3D12_RESOURCE_STATE_DEPTH_WRITE, D3D12_RESOURCE_STATE_GENERIC_READ));
 }
 
 void InitDirect3DApp::DrawEnd(const GameTimer& gt)
@@ -725,6 +844,84 @@ void InitDirect3DApp::BuildCylinderGeometry()
 	mGeometries[geo->name] = std::move(geo);
 }
 
+void InitDirect3DApp::BuildQuadGeometry()
+{
+	GeometryGenerator generator;
+	GeometryGenerator::MeshData quad = generator.CreateQuad(0.f, 0.f, 1.0f, 1.0f, 0.f);
+
+	//정점 정보
+	std::vector<Vertex> vertices(quad.Vertices.size());
+
+	UINT k = 0;
+	for (size_t i = 0; i < quad.Vertices.size(); ++i, ++k)
+	{
+		vertices[k].pos = quad.Vertices[i].Position;
+		vertices[k].uv = quad.Vertices[i].TexC;
+		vertices[k].normal = quad.Vertices[i].Normal;
+		vertices[k].tangent = quad.Vertices[i].TangentU;
+	}
+
+	//인덱스 정보
+	std::vector<std::uint16_t> indices;
+	indices.insert(indices.end(), std::begin(quad.GetIndices16()), std::end(quad.GetIndices16()));
+
+	// 기하 데이터 입력
+	auto geo = std::make_unique<GeometryInfo>();
+	geo->name = "Quad";
+
+	//정점 버퍼 및 뷰
+	geo->vertexCount = (UINT)vertices.size();
+	const UINT vbByteSize = geo->vertexCount * sizeof(Vertex);
+
+	D3D12_HEAP_PROPERTIES heapProperty = CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_UPLOAD);
+	D3D12_RESOURCE_DESC desc = CD3DX12_RESOURCE_DESC::Buffer(vbByteSize);
+
+	md3dDevice->CreateCommittedResource(
+		&heapProperty,
+		D3D12_HEAP_FLAG_NONE,
+		&desc,
+		D3D12_RESOURCE_STATE_GENERIC_READ,
+		nullptr,
+		IID_PPV_ARGS(&geo->vertexBuffer));
+
+	void* vertexDataBuff = nullptr;
+	CD3DX12_RANGE vertexRange(0, 0);
+	geo->vertexBuffer->Map(0, &vertexRange, &vertexDataBuff);
+	memcpy(vertexDataBuff, vertices.data(), vbByteSize);
+	geo->vertexBuffer->Unmap(0, nullptr);
+
+	geo->vertexBufferView.BufferLocation = geo->vertexBuffer->GetGPUVirtualAddress();
+	geo->vertexBufferView.StrideInBytes = sizeof(Vertex);
+	geo->vertexBufferView.SizeInBytes = vbByteSize;
+
+	//인덱스 버퍼 및 뷰
+	geo->indexCount = (UINT)indices.size();
+	const UINT ibByteSize = geo->indexCount * sizeof(uint16_t);
+
+	heapProperty = CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_UPLOAD);
+	desc = CD3DX12_RESOURCE_DESC::Buffer(ibByteSize);
+
+	md3dDevice->CreateCommittedResource(
+		&heapProperty,
+		D3D12_HEAP_FLAG_NONE,
+		&desc,
+		D3D12_RESOURCE_STATE_GENERIC_READ,
+		nullptr,
+		IID_PPV_ARGS(&geo->indexBuffer));
+
+	void* indexDataBuff = nullptr;
+	CD3DX12_RANGE indexRange(0, 0);
+	geo->indexBuffer->Map(0, &indexRange, &indexDataBuff);
+	memcpy(indexDataBuff, indices.data(), ibByteSize);
+	geo->indexBuffer->Unmap(0, nullptr);
+
+	geo->indexBufferView.BufferLocation = geo->indexBuffer->GetGPUVirtualAddress();
+	geo->indexBufferView.Format = DXGI_FORMAT_R16_UINT;
+	geo->indexBufferView.SizeInBytes = ibByteSize;
+
+	mGeometries[geo->name] = std::move(geo);
+}
+
 void InitDirect3DApp::BuildSkullGeometry()
 {
 	ifstream fin("../Models/skull.txt");
@@ -927,6 +1124,7 @@ void InitDirect3DApp::BuildRenderItems()
 		mRenderItems.push_back(move(grid));
 	}
 
+
 	{
 		auto skull = make_unique<RenderItem>();
 		XMStoreFloat4x4(&skull->world, XMMatrixScaling(0.5f, 0.5f, 0.5f) * XMMatrixTranslation(0.f, 1.0f, 0.f));
@@ -934,11 +1132,24 @@ void InitDirect3DApp::BuildRenderItems()
 		skull->material = mMateirals["skull"].get();
 		skull->geometry = mGeometries["Skull"].get();
 		skull->primitiveTopology = D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
-		mItemLayer[(int)RenderLayer::Transparent].push_back(skull.get());
+		mItemLayer[(int)RenderLayer::Opaque].push_back(skull.get());
 		mRenderItems.push_back(move(skull));
 	}
 
-	UINT objCBIdx = 4;
+	{
+		auto quad = make_unique<RenderItem>();
+		quad->world = MathHelper::Identity4x4();
+		quad->texTransform = MathHelper::Identity4x4();
+		quad->objCbIndex = 4;
+		quad->geometry = mGeometries["Quad"].get();
+		quad->material = mMateirals["tile0"].get();
+		XMStoreFloat4x4(&quad->texTransform, XMMatrixScaling(8.f, 8.f, 1.f));
+		quad->primitiveTopology = D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
+		mItemLayer[(int)RenderLayer::Debug].push_back(quad.get());
+		mRenderItems.push_back(move(quad));
+	}
+
+	UINT objCBIdx = 5;
 	for (int i = 0; i < 5; ++i)
 	{
 		auto leftCylinder = make_unique<RenderItem>();
@@ -1015,6 +1226,13 @@ void InitDirect3DApp::BuildShader()
 
 	mShaders["skyboxVS"] = d3dUtil::CompileShader(L"SkyBox.hlsl", nullptr, "VS", "vs_5_0");
 	mShaders["skyboxPS"] = d3dUtil::CompileShader(L"SkyBox.hlsl", nullptr, "PS", "ps_5_0");
+
+	mShaders["shadowVS"] = d3dUtil::CompileShader(L"Shadow.hlsl", nullptr, "VS", "vs_5_0");
+	mShaders["shadowPS"] = d3dUtil::CompileShader(L"Shadow.hlsl", nullptr, "PS", "ps_5_0");
+
+	mShaders["debugVS"] = d3dUtil::CompileShader(L"ShadowDebug.hlsl", nullptr, "VS", "vs_5_0");
+	mShaders["debugPS"] = d3dUtil::CompileShader(L"ShadowDebug.hlsl", nullptr, "PS", "ps_5_0");
+
 }
 
 void InitDirect3DApp::BuildConstantBuffers()
@@ -1071,7 +1289,7 @@ void InitDirect3DApp::BuildConstantBuffers()
 	// 공용 상수 버퍼
 	{
 		UINT size = sizeof(PassConstants);
-		mPassByteSize = (size + 255) & ~255;
+		mPassByteSize = ((size + 255) & ~255) * 2;
 		// 올림을 해서 256의 배수 값으로 바꿔주는 코드~~
 
 		D3D12_HEAP_PROPERTIES heapProperty = CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_UPLOAD);
@@ -1109,17 +1327,23 @@ void InitDirect3DApp::BuildRootSignature()
 		CD3DX12_DESCRIPTOR_RANGE(D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 1, 2), // t2 : object normal texture
 	};
 
-	CD3DX12_ROOT_PARAMETER param[6];
+	CD3DX12_DESCRIPTOR_RANGE shadowTable[]
+	{
+		CD3DX12_DESCRIPTOR_RANGE(D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 1, 3), // t3 : shadow texture
+	};
+
+	CD3DX12_ROOT_PARAMETER param[7];
 	param[0].InitAsConstantBufferView(0);	// 0번 -> b0 -> CBV (개별)
 	param[1].InitAsConstantBufferView(1);	// 1번 -> b1 -> CBV (개별 머티리얼)
 	param[2].InitAsConstantBufferView(2);	// 2번 -> b2 -> CBV (공용)
-	param[3].InitAsDescriptorTable(_countof(skyBoxTable), skyBoxTable);	// t0
-	param[4].InitAsDescriptorTable(_countof(texTable), texTable);	// t1
-	param[5].InitAsDescriptorTable(_countof(normalTable), normalTable);	// t1
+	param[3].InitAsDescriptorTable(_countof(skyBoxTable), skyBoxTable);		// t0
+	param[4].InitAsDescriptorTable(_countof(texTable), texTable);			// t1
+	param[5].InitAsDescriptorTable(_countof(normalTable), normalTable);		// t2
+	param[6].InitAsDescriptorTable(_countof(shadowTable), shadowTable);		// t3
 
-	D3D12_STATIC_SAMPLER_DESC samplerDesc = CD3DX12_STATIC_SAMPLER_DESC(0);
+	auto staticSamplers = GetStaticSampler();
 
-	D3D12_ROOT_SIGNATURE_DESC sigDesc = CD3DX12_ROOT_SIGNATURE_DESC(_countof(param), param, 1, &samplerDesc);
+	D3D12_ROOT_SIGNATURE_DESC sigDesc = CD3DX12_ROOT_SIGNATURE_DESC(_countof(param), param, (UINT)staticSamplers.size(), staticSamplers.data());
 	sigDesc.Flags = D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT;
 
 	ComPtr<ID3DBlob> blobSignature;
@@ -1136,7 +1360,7 @@ void InitDirect3DApp::BuildDescriptorHeaps()
 
 	// srv 힙
 	D3D12_DESCRIPTOR_HEAP_DESC srvHeapDesc = {};
-	srvHeapDesc.NumDescriptors = (int)mTextures.size();
+	srvHeapDesc.NumDescriptors = (int)mTextures.size() + 1; // 기존 텍스쳐 + 그림자맵 텍스쳐
 	srvHeapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
 	srvHeapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
 	md3dDevice->CreateDescriptorHeap(&srvHeapDesc, IID_PPV_ARGS(&mSrvDescriptorHeap));
@@ -1180,6 +1404,23 @@ void InitDirect3DApp::BuildDescriptorHeaps()
 	// ---------------------------------------
 
 	mSkyboxTexHeapIndex = (UINT)tex2DList.size();
+
+	// ----------------- SHADOW MAP --------------
+	mShadowMapHeapIndex = mSkyboxTexHeapIndex + 1;
+
+	auto srvCpuStart = mSrvDescriptorHeap->GetCPUDescriptorHandleForHeapStart();
+	auto srvGpuStart = mSrvDescriptorHeap->GetGPUDescriptorHandleForHeapStart();
+	auto dsvCpuStart = mDsvHeap->GetCPUDescriptorHandleForHeapStart();
+
+	mShadowMapSrv = CD3DX12_GPU_DESCRIPTOR_HANDLE(srvGpuStart, mShadowMapHeapIndex, mCbvSrvDescriptorSize);
+
+	// 그림자 맵 => 텍스쳐
+	mShadowMap->BuildDescriptors
+	(
+		CD3DX12_CPU_DESCRIPTOR_HANDLE(srvCpuStart, mShadowMapHeapIndex, mCbvSrvDescriptorSize),
+		CD3DX12_GPU_DESCRIPTOR_HANDLE(srvGpuStart, mShadowMapHeapIndex, mCbvSrvDescriptorSize),
+		CD3DX12_CPU_DESCRIPTOR_HANDLE(dsvCpuStart, 1, mDsvDescriptorSize)
+	);
 }
 
 void InitDirect3DApp::BuildPSO()
@@ -1246,7 +1487,7 @@ void InitDirect3DApp::BuildPSO()
 	ThrowIfFailed(md3dDevice->CreateGraphicsPipelineState(&alphaDesc, IID_PPV_ARGS(&mPSOs["alphaTest"])));
 	// --------------------------------------------------------------
 
-	// 스카이박스 오브젝트 렌더링 ㄹ
+	// -------------------- 스카이박스 오브젝트 렌더링 --------------------
 	D3D12_GRAPHICS_PIPELINE_STATE_DESC skyPsoDesc = opaquePsoDesc;
 	skyPsoDesc.RasterizerState.CullMode = D3D12_CULL_MODE_NONE;
 	// Far < 1일 때, xyww w = 1
@@ -1264,4 +1505,70 @@ void InitDirect3DApp::BuildPSO()
 	};
 
 	ThrowIfFailed(md3dDevice->CreateGraphicsPipelineState(&skyPsoDesc, IID_PPV_ARGS(&mPSOs["skybox"])));
+	// --------------------------------------------------------------------------------
+
+	// -------------------- 그림자 맵 패스
+	D3D12_GRAPHICS_PIPELINE_STATE_DESC shadowPsoDesc = opaquePsoDesc;
+	shadowPsoDesc.RasterizerState.DepthBias = 100000;
+	shadowPsoDesc.RasterizerState.DepthBiasClamp = 0.0f;
+	shadowPsoDesc.RasterizerState.SlopeScaledDepthBias = 1.0f; // 계단 현상 보간값? (그림자 부드러워짐)
+
+	shadowPsoDesc.VS =
+	{
+		reinterpret_cast<BYTE*>(mShaders["shadowVS"]->GetBufferPointer()), mShaders["shadowVS"]->GetBufferSize()
+	};
+
+	shadowPsoDesc.PS =
+	{
+		reinterpret_cast<BYTE*>(mShaders["shadowPS"]->GetBufferPointer()), mShaders["shadowPS"]->GetBufferSize()
+	};
+
+	shadowPsoDesc.NumRenderTargets = 0;	// 렌더링은 안 함. 깊이 버퍼에 기록만
+	shadowPsoDesc.RTVFormats[0] = DXGI_FORMAT_UNKNOWN;
+
+	ThrowIfFailed(md3dDevice->CreateGraphicsPipelineState(&shadowPsoDesc, IID_PPV_ARGS(&mPSOs["shadow"])));
+	// --------------------------------------------------------------------------------
+
+	// -------------------- Shadow Debug ------------------------
+	D3D12_GRAPHICS_PIPELINE_STATE_DESC debugPsoDesc = opaquePsoDesc;
+
+	debugPsoDesc.VS =
+	{
+		reinterpret_cast<BYTE*>(mShaders["debugVS"]->GetBufferPointer()), mShaders["debugVS"]->GetBufferSize()
+	};
+
+	debugPsoDesc.PS =
+	{
+		reinterpret_cast<BYTE*>(mShaders["debugPS"]->GetBufferPointer()), mShaders["debugPS"]->GetBufferSize()
+	};
+
+	ThrowIfFailed(md3dDevice->CreateGraphicsPipelineState(&debugPsoDesc, IID_PPV_ARGS(&mPSOs["debug"])));
+
+}
+
+array<const CD3DX12_STATIC_SAMPLER_DESC, 2> InitDirect3DApp::GetStaticSampler()
+{
+	const CD3DX12_STATIC_SAMPLER_DESC pointWarp
+	(
+		0, // shader Register s0
+		D3D12_FILTER_MIN_MAG_MIP_POINT,	// filter
+		D3D12_TEXTURE_ADDRESS_MODE_WRAP,	// addressU
+		D3D12_TEXTURE_ADDRESS_MODE_WRAP,
+		D3D12_TEXTURE_ADDRESS_MODE_WRAP
+	);
+
+	const CD3DX12_STATIC_SAMPLER_DESC shadow
+	(
+		1, // shader Register s1
+		D3D12_FILTER_COMPARISON_MIN_MAG_LINEAR_MIP_POINT,	// filter
+		D3D12_TEXTURE_ADDRESS_MODE_BORDER,	// addressU
+		D3D12_TEXTURE_ADDRESS_MODE_BORDER,
+		D3D12_TEXTURE_ADDRESS_MODE_BORDER,
+		0.0f,
+		16,
+		D3D12_COMPARISON_FUNC_LESS,
+		D3D12_STATIC_BORDER_COLOR_OPAQUE_BLACK
+	);
+
+	return { pointWarp, shadow };
 }

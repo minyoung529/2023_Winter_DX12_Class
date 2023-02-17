@@ -150,6 +150,7 @@
     <ClInclude Include="..\Common\MathHelper.h" />
     <ClInclude Include="D3DApp.h" />
     <ClInclude Include="InitDirect3DApp.h" />
+    <ClInclude Include="ShadowMap.h" />
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="..\Common\Camera.cpp" />
@@ -160,6 +161,7 @@
     <ClCompile Include="..\Common\MathHelper.cpp" />
     <ClCompile Include="D3DApp.cpp" />
     <ClCompile Include="InitDirect3DApp.cpp" />
+    <ClCompile Include="ShadowMap.cpp" />
   </ItemGroup>
   <ItemGroup>
     <FxCompile Include="Color.hlsl">
@@ -187,6 +189,12 @@
     </FxCompile>
   </ItemGroup>
   <ItemGroup>
+    <None Include="Shadow.hlsl">
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">true</ExcludedFromBuild>
+    </None>
+    <None Include="ShadowDebug.hlsl">
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">true</ExcludedFromBuild>
+    </None>
     <None Include="SkyBox.hlsl">
       <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">true</ExcludedFromBuild>
     </None>

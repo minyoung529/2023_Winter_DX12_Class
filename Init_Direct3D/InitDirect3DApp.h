@@ -6,6 +6,7 @@
 #include "../Common/GeometryGenerator.h"
 #include "../Common/DDSTextureLoader.h"
 #include "../Common/Camera.h"
+#include "ShadowMap.h"
 
 using namespace DirectX;
 using namespace std;
@@ -17,6 +18,7 @@ enum class RenderLayer : int
 	Opaque = 0,
 	Transparent,
 	AlphaTested,
+	Debug,
 	SkyBox,
 	Count
 };
@@ -122,6 +124,10 @@ struct PassConstants
 	XMFLOAT4X4 proj = MathHelper::Identity4x4();
 	XMFLOAT4X4 invProj = MathHelper::Identity4x4();
 	XMFLOAT4X4 viewProj = MathHelper::Identity4x4();
+	XMFLOAT4X4 inViewProj = MathHelper::Identity4x4();
+
+	// 라이트
+	XMFLOAT4X4 shadowTransform = MathHelper::Identity4x4();
 
 	// 조명 정보
 	XMFLOAT4 ambientColor = { 0.f, 0.f, 0.f,1.f };
@@ -161,15 +167,18 @@ private:
 	void UpdateCamera(const GameTimer& gt);
 	void UpdateObjectCBs(const GameTimer& gt);
 	void UpdateMaterialCB(const GameTimer& gt);
+	void UpdateShadowTransform(const GameTimer& gt);
 	void UpdatePassCB(const GameTimer& gt);
+	void UpdateShadowPassCB(const GameTimer& gt);
 
 	virtual void DrawBegin(const GameTimer& gt) override;
-
+	
 	virtual void Draw(const GameTimer& gt) override;
 	void DrawRenderItems(vector<RenderItem*>& renderItems);
+	void DrawSceneToShadowMap();
 
 	virtual void DrawEnd(const GameTimer& gt) override;
-
+	
 	virtual void OnMouseDown(WPARAM btnState, int x, int y)  override;
 	virtual void OnMouseUp(WPARAM btnState, int x, int y) override;
 	virtual void OnMouseMove(WPARAM btnState, int x, int y) override;
@@ -183,6 +192,7 @@ private:
 	void BuildGridGeometry();
 	void BuildSphereGeometry();
 	void BuildCylinderGeometry();
+	void BuildQuadGeometry();
 	void BuildSkullGeometry();
 
 	// 재질 생성
@@ -198,6 +208,8 @@ private:
 	void BuildRootSignature();
 	void BuildDescriptorHeaps();
 	void BuildPSO();
+
+	array<const CD3DX12_STATIC_SAMPLER_DESC, 2> GetStaticSampler();
 
 private:
 
@@ -248,8 +260,34 @@ private:
 	// 텍스쳐 구조 맵
 	unordered_map<string, unique_ptr<TextureInfo>> mTextures;
 
+
+	// 그림자 맵
+	unique_ptr<ShadowMap> mShadowMap;
+
 	// 스카이박스 텍스쳐 인덱스
 	UINT mSkyboxTexHeapIndex = 0;
+
+	// 그림자 맵 텍스쳐 인덱스
+	UINT mShadowMapHeapIndex = 0;
+
+	// 그림자 맵 디스크립터
+	CD3DX12_GPU_DESCRIPTOR_HANDLE mShadowMapSrv;
+
+	// 경계 구 : 광원 이동
+	DirectX::BoundingSphere mSceneBounds;
+
+	// 라이트 관련 행렬
+	float mLightNearZ = 0.0f;
+	float mLightFarZ = 0.0f;
+	XMFLOAT3 mLightPosW;
+
+	XMFLOAT4X4 mLightView = MathHelper::Identity4x4();
+	XMFLOAT4X4 mLightProj = MathHelper::Identity4x4();
+	XMFLOAT4X4 mShadowTransform = MathHelper::Identity4x4();
+
+	float mLightRotationAngle = 0.0f;
+	XMFLOAT3 mBaseLightDirection = XMFLOAT3(0.57735f, -0.57735f, 0.57735f);
+	XMFLOAT3 mRotatedLightDirection;
 
 	// ------- World / View / Projection -------
 	Camera mCamera;
