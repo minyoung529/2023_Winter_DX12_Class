@@ -5,6 +5,7 @@
 #include "../Common/MathHelper.h"
 #include "../Common/GeometryGenerator.h"
 #include "../Common/DDSTextureLoader.h"
+#include "../Common/Camera.h"
 
 using namespace DirectX;
 using namespace std;
@@ -16,15 +17,18 @@ enum class RenderLayer : int
 	Opaque = 0,
 	Transparent,
 	AlphaTested,
+	SkyBox,
 	Count
 };
 
 // 정점 정보
+// 4 맞출 필요 없음
 struct Vertex
 {
 	XMFLOAT3 pos;
 	XMFLOAT3 normal;
 	XMFLOAT2 uv;
+	XMFLOAT3 tangent;
 };
 
 // 개별 오브젝트 상수 (World)
@@ -43,7 +47,8 @@ struct MatConstants
 	float roughness = 0.25f;
 
 	UINT texture_on = 0;
-	XMFLOAT3 padding = { 0.f, 0.f, 0.f };
+	UINT normal_on = 0;
+	XMFLOAT2 padding = { 0.f, 0.f };
 };
 
 struct GeometryInfo
@@ -72,6 +77,7 @@ struct MaterialInfo
 
 	int matCBIdx = -1;
 	int diffuseSrvHeapIndex = -1;
+	int normalSrvHeapIndex = -1;
 
 	XMFLOAT4 diffuseAlbedo = { 1.0f, 1.0f, 1.0f, 1.0f };
 
@@ -122,6 +128,12 @@ struct PassConstants
 	XMFLOAT3 eyePosW = { 0.f, 0.f, 0.f };
 	UINT lightCount = MAXLIGHTS;
 	LightInfo lights[MAXLIGHTS];
+
+	// 안개 효과 정보
+	XMFLOAT4 fogColor = { 0.7f, 0.7f, 0.7f, 1.0f };
+	float gFogStart = 5.0f;
+	float gFogRange = 150.0f;
+	XMFLOAT2 fogPadding;
 };
 
 // Texture 구조체
@@ -222,7 +234,7 @@ private:
 	unordered_map<string, ComPtr<ID3D12PipelineState>> mPSOs;
 
 	// 전체 오브젝트 리스트
-	vector<unique_ptr< RenderItem>> mRenderItems;
+	vector<unique_ptr<RenderItem>> mRenderItems;
 
 	// 렌더링 레이어
 	vector<RenderItem*> mItemLayer[(int)RenderLayer::Count];
@@ -236,18 +248,11 @@ private:
 	// 텍스쳐 구조 맵
 	unordered_map<string, unique_ptr<TextureInfo>> mTextures;
 
+	// 스카이박스 텍스쳐 인덱스
+	UINT mSkyboxTexHeapIndex = 0;
+
 	// ------- World / View / Projection -------
-	XMFLOAT4X4 mWorld = MathHelper::Identity4x4();	// 단위 행렬
-	XMFLOAT4X4 mView = MathHelper::Identity4x4();
-	XMFLOAT4X4 mProj = MathHelper::Identity4x4();
-
-	// 카메라 위치
-	XMFLOAT3 mEyePos = { 0.f, 0.f, 0.f };
-
-	// 구면 좌표 제어값
-	float mTheta = 1.5f * XM_PI;
-	float mPhi = XM_PIDIV4;			// 45
-	float mRadius = 5.0f;
+	Camera mCamera;
 
 	// 마우스 좌표
 	POINT mLastMousePos = { 0,0 };

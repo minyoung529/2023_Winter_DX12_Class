@@ -43,6 +43,12 @@ bool InitDirect3DApp::Initialize()
 	// 초기화 명령들을 준비하기 위해 명령 목록 재설정
 	mCommandList->Reset(mDirectCmdListAlloc.Get(), nullptr);
 
+	// 카메라 초기 위치 세팅
+	mCamera.SetPosition(0.0f, 2.0f, -15.0f);
+
+	// -----------------------------------------------------
+	// 초기화 명령
+	// -----------------------------------------------------
 	LoadTextures();
 
 	// 기하 도형 생성
@@ -83,8 +89,7 @@ void InitDirect3DApp::OnResize()
 	D3DApp::OnResize();
 
 	// 창의 크기가 바뀌는 부분에서 투영 행렬 갱신
-	XMMATRIX proj = XMMatrixPerspectiveFovLH(0.25f * MathHelper::Pi, AspectRatio(), 1.0f, 1000.f);
-	XMStoreFloat4x4(&mProj, proj);
+	mCamera.SetLens(0.25f * MathHelper::Pi, AspectRatio(), 1.0f, 1000.f);
 }
 
 void InitDirect3DApp::Update(const GameTimer& gt)
@@ -97,19 +102,21 @@ void InitDirect3DApp::Update(const GameTimer& gt)
 
 void InitDirect3DApp::UpdateCamera(const GameTimer& gt)
 {
-	// 구면 좌표 => 직교 좌표
+	const float dt = gt.DeltaTime();
 
-	mEyePos.x = mRadius * sinf(mPhi) * cosf(mTheta);
-	mEyePos.y = mRadius * cosf(mPhi);
-	mEyePos.z = mRadius * sinf(mPhi) * sinf(mTheta);
+	if (GetAsyncKeyState('W') & 0x8000)
+		mCamera.Walk(10.0f * dt);
 
-	// 시야 행렬 구축
-	XMVECTOR pos = XMVectorSet(mEyePos.x, mEyePos.y, mEyePos.z, 1.0f);
-	XMVECTOR target = XMVectorZero();
-	XMVECTOR up = XMVectorSet(0.0f, 1.0f, 0.0f, 0.0f);
+	if (GetAsyncKeyState('S') & 0x8000)
+		mCamera.Walk(-10.0f * dt);
 
-	XMMATRIX view = XMMatrixLookAtLH(pos, target, up);
-	XMStoreFloat4x4(&mView, view);
+	if (GetAsyncKeyState('A') & 0x8000)
+		mCamera.Strafe(-10.0f * dt);
+
+	if (GetAsyncKeyState('D') & 0x8000)
+		mCamera.Strafe(10.0f * dt);
+
+	mCamera.UpdateViewMatrix();
 }
 
 void InitDirect3DApp::UpdateObjectCBs(const GameTimer& gt)
@@ -141,6 +148,7 @@ void InitDirect3DApp::UpdateMaterialCB(const GameTimer& gt)
 		matConstants.fresnelR0 = mat->fresnelR0;
 		matConstants.roughness = mat->roughness;
 		matConstants.texture_on = (mat->diffuseSrvHeapIndex == -1 ? 0 : 1);
+		matConstants.normal_on = (mat->normalSrvHeapIndex == -1 ? 0 : 1);
 
 		UINT elementIdx = mat->matCBIdx;
 		UINT elementByteSize = (sizeof(MatConstants) + 255) & ~255;
@@ -152,8 +160,8 @@ void InitDirect3DApp::UpdateMaterialCB(const GameTimer& gt)
 void InitDirect3DApp::UpdatePassCB(const GameTimer& gt)
 {
 	PassConstants passConstants;
-	XMMATRIX view = XMLoadFloat4x4(&mView);
-	XMMATRIX proj = XMLoadFloat4x4(&mProj);
+	XMMATRIX view = mCamera.GetView();
+	XMMATRIX proj = mCamera.GetProj();
 
 	XMMATRIX invView = XMMatrixInverse(&XMMatrixDeterminant(view), view);
 	XMMATRIX invProj = XMMatrixInverse(&XMMatrixDeterminant(proj), proj);
@@ -166,14 +174,14 @@ void InitDirect3DApp::UpdatePassCB(const GameTimer& gt)
 	XMStoreFloat4x4(&passConstants.viewProj, XMMatrixTranspose(viewProj));
 
 	passConstants.ambientColor = { 0.25f, 0.25f, 0.35f, 1.0f };
-	passConstants.eyePosW = mEyePos;
+	passConstants.eyePosW = mCamera.GetPosition3f();
 	passConstants.lightCount = 1;
 
 	passConstants.lights[0].lightType = 0; // DIR
 	passConstants.lights[0].direction = { 0.5773f, -0.57737f, 0.5773f };
 	passConstants.lights[0].strength = { 0.6f, 0.6f, 0.6f };
 
-	// --------
+	/*
 	for (int i = 0; i < 5; ++i)
 	{
 		passConstants.lights[i * 2 + 1].position = XMFLOAT3{ -5.f, 3.5f, -10.f + i * 5.0f };
@@ -190,6 +198,7 @@ void InitDirect3DApp::UpdatePassCB(const GameTimer& gt)
 	}
 
 	passConstants.lightCount = 11;
+	*/
 
 	memcpy(&mPassMappedData[0], &passConstants, sizeof(PassConstants));
 }
@@ -235,6 +244,12 @@ void InitDirect3DApp::Draw(const GameTimer& gt)
 	D3D12_GPU_VIRTUAL_ADDRESS passCBAddress = mPassCB->GetGPUVirtualAddress();
 	mCommandList->SetGraphicsRootConstantBufferView(2, passCBAddress);
 
+	// 스카이박스 텍스쳐 
+	CD3DX12_GPU_DESCRIPTOR_HANDLE skyTextureDescriptor(mSrvDescriptorHeap->GetGPUDescriptorHandleForHeapStart());
+	skyTextureDescriptor.Offset(mSkyboxTexHeapIndex, mCbvSrvDescriptorSize);
+
+	mCommandList->SetGraphicsRootDescriptorTable(3, skyTextureDescriptor);
+
 	mCommandList->SetPipelineState(mPSOs["opaque"].Get());
 	DrawRenderItems(mItemLayer[(int)RenderLayer::Opaque]);
 
@@ -243,6 +258,10 @@ void InitDirect3DApp::Draw(const GameTimer& gt)
 
 	mCommandList->SetPipelineState(mPSOs["transparent"].Get());
 	DrawRenderItems(mItemLayer[(int)RenderLayer::Transparent]);
+
+	mCommandList->SetPipelineState(mPSOs["skybox"].Get());
+	DrawRenderItems(mItemLayer[(int)RenderLayer::SkyBox]);
+
 }
 
 void InitDirect3DApp::DrawRenderItems(vector<RenderItem*>& renderItems)
@@ -272,8 +291,18 @@ void InitDirect3DApp::DrawRenderItems(vector<RenderItem*>& renderItems)
 			CD3DX12_GPU_DESCRIPTOR_HANDLE tex(mSrvDescriptorHeap->GetGPUDescriptorHandleForHeapStart());
 			tex.Offset(item->material->diffuseSrvHeapIndex, mCbvSrvDescriptorSize);
 
-			mCommandList->SetGraphicsRootDescriptorTable(3, tex);
+			mCommandList->SetGraphicsRootDescriptorTable(4, tex);
 		}
+
+		// 노멀 버퍼 서술자 설정
+		if (item->material->normalSrvHeapIndex != -1)
+		{
+			CD3DX12_GPU_DESCRIPTOR_HANDLE tex(mSrvDescriptorHeap->GetGPUDescriptorHandleForHeapStart());
+			tex.Offset(item->material->normalSrvHeapIndex, mCbvSrvDescriptorSize);
+
+			mCommandList->SetGraphicsRootDescriptorTable(5, tex);
+		}
+
 
 		//vertex
 		mCommandList->IASetVertexBuffers(0, 1, &item->geometry->vertexBufferView);
@@ -329,17 +358,8 @@ void InitDirect3DApp::OnMouseMove(WPARAM btnState, int x, int y)
 		float dx = XMConvertToRadians(0.25f * static_cast<float>(x - mLastMousePos.x));
 		float dy = XMConvertToRadians(0.25f * static_cast<float>(y - mLastMousePos.y));
 
-		mTheta += dx;
-		mPhi += dy;
-		mPhi = MathHelper::Clamp(mPhi, 0.1f, MathHelper::Pi - 0.1f);
-	}
-	else if ((btnState & MK_RBUTTON) != 0)	// 확대 축소
-	{
-		float dx = 0.2f * static_cast<float>(x - mLastMousePos.x);
-		float dy = 0.2f * static_cast<float>(y - mLastMousePos.y);
-
-		mRadius += dx - dy;
-		mRadius = MathHelper::Clamp(mRadius, 3.0f, 150.0f);
+		mCamera.Pitch(dy);
+		mCamera.RotateY(dx);
 	}
 
 	mLastMousePos = { x, y };
@@ -349,65 +369,48 @@ void InitDirect3DApp::OnMouseMove(WPARAM btnState, int x, int y)
 
 void InitDirect3DApp::LoadTextures()
 {
+	vector<string> texNames =
 	{
-		auto brickTex = make_unique<TextureInfo>();
-		brickTex->name = "bricksTex";
-		brickTex->fileName = L"../Textures/bricks.dds";
-		ThrowIfFailed(DirectX::CreateDDSTextureFromFile12
-		(
-			md3dDevice.Get(),
-			mCommandList.Get(),
-			brickTex->fileName.c_str(),
-			brickTex->resource,
-			brickTex->uploadHeap
-		));
-		mTextures[brickTex->name] = move(brickTex);
-	}
-	{
-		auto tileTex = make_unique<TextureInfo>();
-		tileTex->name = "tileTex";
-		tileTex->fileName = L"../Textures/tile.dds";
-		ThrowIfFailed(DirectX::CreateDDSTextureFromFile12
-		(
-			md3dDevice.Get(),
-			mCommandList.Get(),
-			tileTex->fileName.c_str(),
-			tileTex->resource,
-			tileTex->uploadHeap
-		));
-		mTextures[tileTex->name] = move(tileTex);
+		"bricks",		// 0
+		"bricksNormal",	// 1
+		"stone",		// 2
+		"tile",			// 3
+		"tileNormal",	// 4
+		"fence",		// 5
+		"default",		// 6
+		"skyCubeMap"	// 7
+	};
 
-	}
+	vector<wstring> texPaths =
 	{
-		auto stoneTex = make_unique<TextureInfo>();
-		stoneTex->name = "stoneTex";
-		stoneTex->fileName = L"../Textures/stone.dds";
+		L"../Textures/bricks.dds",
+		L"../Textures/bricks_nmap.dds",
+		L"../Textures/stone.dds",
+		L"../Textures/tile.dds",
+		L"../Textures/tile_nmap.dds",
+		L"../Textures/WireFence.dds",
+		L"../Textures/white1x1.dds",
+		L"../Textures/snowcube1024.dds"
+	};
+
+	for (int i = 0; i < (int)texPaths.size(); i++)
+	{
+		auto texture = make_unique<TextureInfo>();
+		texture->name = texNames[i];
+		texture->fileName = texPaths[i];
+
 		ThrowIfFailed(DirectX::CreateDDSTextureFromFile12
 		(
 			md3dDevice.Get(),
 			mCommandList.Get(),
-			stoneTex->fileName.c_str(),
-			stoneTex->resource,
-			stoneTex->uploadHeap
+			texture->fileName.c_str(),
+			texture->resource,
+			texture->uploadHeap
 		));
-		mTextures[stoneTex->name] = move(stoneTex);
-	}
-	{
-		auto fenceTex = make_unique<TextureInfo>();
-		fenceTex->name = "fenceTex";
-		fenceTex->fileName = L"../Textures/WireFence.dds";
-		ThrowIfFailed(DirectX::CreateDDSTextureFromFile12
-		(
-			md3dDevice.Get(),
-			mCommandList.Get(),
-			fenceTex->fileName.c_str(),
-			fenceTex->resource,
-			fenceTex->uploadHeap
-		));
-		mTextures[fenceTex->name] = move(fenceTex);
+
+		mTextures[texture->name] = move(texture);
 	}
 }
-
 
 void InitDirect3DApp::BuildBoxGeometry()
 {
@@ -423,6 +426,7 @@ void InitDirect3DApp::BuildBoxGeometry()
 		vertices[k].pos = box.Vertices[i].Position;
 		vertices[k].normal = box.Vertices[i].Normal;
 		vertices[k].uv = box.Vertices[i].TexC;
+		vertices[k].tangent = box.Vertices[i].TangentU;
 	}
 
 	//인덱스 정보
@@ -486,7 +490,6 @@ void InitDirect3DApp::BuildBoxGeometry()
 	mGeometries[geo->name] = std::move(geo);
 }
 
-
 void InitDirect3DApp::BuildGridGeometry()
 {
 	GeometryGenerator generator;
@@ -501,6 +504,7 @@ void InitDirect3DApp::BuildGridGeometry()
 		vertices[k].pos = grid.Vertices[i].Position;
 		vertices[k].uv = grid.Vertices[i].TexC;
 		vertices[k].normal = grid.Vertices[i].Normal;
+		vertices[k].tangent = grid.Vertices[i].TangentU;
 	}
 
 	//인덱스 정보
@@ -563,6 +567,7 @@ void InitDirect3DApp::BuildGridGeometry()
 
 	mGeometries[geo->name] = std::move(geo);
 }
+
 void InitDirect3DApp::BuildSphereGeometry()
 {
 	GeometryGenerator generator;
@@ -577,6 +582,7 @@ void InitDirect3DApp::BuildSphereGeometry()
 		vertices[k].pos = sphere.Vertices[i].Position;
 		vertices[k].uv = sphere.Vertices[i].TexC;
 		vertices[k].normal = sphere.Vertices[i].Normal;
+		vertices[k].tangent = sphere.Vertices[i].TangentU;
 	}
 
 	//인덱스 정보
@@ -639,6 +645,7 @@ void InitDirect3DApp::BuildSphereGeometry()
 
 	mGeometries[geo->name] = std::move(geo);
 }
+
 void InitDirect3DApp::BuildCylinderGeometry()
 {
 	GeometryGenerator generator;
@@ -654,6 +661,7 @@ void InitDirect3DApp::BuildCylinderGeometry()
 		vertices[k].pos = cylinder.Vertices[i].Position;
 		vertices[k].uv = cylinder.Vertices[i].TexC;
 		vertices[k].normal = cylinder.Vertices[i].Normal;
+		vertices[k].tangent = cylinder.Vertices[i].TangentU;
 	}
 
 	//인덱스 정보
@@ -716,6 +724,7 @@ void InitDirect3DApp::BuildCylinderGeometry()
 
 	mGeometries[geo->name] = std::move(geo);
 }
+
 void InitDirect3DApp::BuildSkullGeometry()
 {
 	ifstream fin("../Models/skull.txt");
@@ -805,13 +814,15 @@ void InitDirect3DApp::BuildSkullGeometry()
 
 	mGeometries[geo->name] = std::move(geo);
 }
+
 void InitDirect3DApp::BuildMaterials()
 {
 	{
 		auto bricks0 = make_unique<MaterialInfo>();
 		bricks0->name = "bricks0";
 		bricks0->matCBIdx = bricks0->diffuseSrvHeapIndex = 0;
-		bricks0->diffuseAlbedo = XMFLOAT4(Colors::ForestGreen);
+		bricks0->normalSrvHeapIndex = 1;
+		bricks0->diffuseAlbedo = XMFLOAT4(Colors::White);
 		bricks0->fresnelR0 = XMFLOAT3(0.02f, 0.02f, 0.02f);
 		bricks0->roughness = 0.1f;
 		mMateirals[bricks0->name] = move(bricks0);
@@ -821,7 +832,7 @@ void InitDirect3DApp::BuildMaterials()
 		stone0->name = "stone0";
 		stone0->matCBIdx = 1;
 		stone0->diffuseSrvHeapIndex = 2;
-		stone0->diffuseAlbedo = XMFLOAT4(Colors::LightSteelBlue);
+		stone0->diffuseAlbedo = XMFLOAT4(Colors::White);
 		stone0->fresnelR0 = XMFLOAT3(0.05f, 0.05f, 0.05f);
 		stone0->roughness = 0.3f;
 		mMateirals[stone0->name] = move(stone0);
@@ -830,8 +841,9 @@ void InitDirect3DApp::BuildMaterials()
 		auto tile0 = make_unique<MaterialInfo>();
 		tile0->name = "tile0";
 		tile0->matCBIdx = 2;
-		tile0->diffuseSrvHeapIndex = 1;
-		tile0->diffuseAlbedo = XMFLOAT4(Colors::LightGray);
+		tile0->diffuseSrvHeapIndex = 3;
+		tile0->normalSrvHeapIndex = 4;
+		tile0->diffuseAlbedo = XMFLOAT4(Colors::White);
 		tile0->fresnelR0 = XMFLOAT3(0.02f, 0.02f, 0.02f);
 		tile0->roughness = 0.2f;
 		mMateirals[tile0->name] = move(tile0);
@@ -840,7 +852,7 @@ void InitDirect3DApp::BuildMaterials()
 		auto skull = make_unique<MaterialInfo>();
 		skull->name = "skull";
 		skull->matCBIdx = 3;
-		skull->diffuseAlbedo = XMFLOAT4(1.0f, 1.0f, 1.0f, 0.5f);
+		skull->diffuseAlbedo = { 1,1,1,0.8f };
 		skull->fresnelR0 = XMFLOAT3(0.05f, 0.05f, 0.05f);
 		skull->roughness = 0.3f;
 		mMateirals[skull->name] = move(skull);
@@ -849,20 +861,53 @@ void InitDirect3DApp::BuildMaterials()
 		auto fence = make_unique<MaterialInfo>();
 		fence->name = "fence";
 		fence->matCBIdx = 4;
-		fence->diffuseSrvHeapIndex = 3;
+		fence->diffuseSrvHeapIndex = 5;
 		fence->diffuseAlbedo = XMFLOAT4(Colors::White);
 		fence->fresnelR0 = XMFLOAT3(0.02f, 0.02f, 0.02f);
 		fence->roughness = 0.2f;
 		mMateirals[fence->name] = move(fence);
 	}
+	{
+		auto mirror = make_unique<MaterialInfo>();
+		mirror->name = "mirror";
+		mirror->matCBIdx = 5;
+		mirror->diffuseSrvHeapIndex = 6;
+		mirror->diffuseAlbedo = XMFLOAT4(Colors::Black);
+		mirror->fresnelR0 = XMFLOAT3(0.98f, 0.97f, 0.95f);
+		mirror->roughness = 0.1f;
+		mMateirals[mirror->name] = move(mirror);
+	}
+	{
+		auto skybox = make_unique<MaterialInfo>();
+		skybox->name = "skybox";
+		skybox->matCBIdx = 6;
+		skybox->diffuseSrvHeapIndex = 7;
+		skybox->diffuseAlbedo = XMFLOAT4(Colors::White);
+		skybox->fresnelR0 = XMFLOAT3(0.1f, 0.1f, 0.1f);
+		skybox->roughness = 1.0f;
+		mMateirals[skybox->name] = move(skybox);
+	}
 }
 
 void InitDirect3DApp::BuildRenderItems()
 {
+	// SKY BOX (SPHERE)
+	{
+		auto skybox = make_unique<RenderItem>();
+		XMStoreFloat4x4(&skybox->world, XMMatrixScaling(5000.f, 5000.f, 5000.f));
+		skybox->texTransform = MathHelper::Identity4x4();
+		skybox->objCbIndex = 0;
+		skybox->geometry = mGeometries["Sphere"].get();
+		skybox->material = mMateirals["skybox"].get();
+		skybox->primitiveTopology = D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
+		mItemLayer[(int)RenderLayer::SkyBox].push_back(skybox.get());
+		mRenderItems.push_back(move(skybox));
+	}
+
 	{
 		auto box = make_unique<RenderItem>();
-		XMStoreFloat4x4(&box->world, XMMatrixScaling(2.f, 2.f, 2.f) * XMMatrixTranslation(0.f, 0.5f, 0.f));
-		box->objCbIndex = 0;
+		XMStoreFloat4x4(&box->world, XMMatrixScaling(2.f, 2.f, 2.f) * XMMatrixTranslation(0.f, 0.51f, 0.f));
+		box->objCbIndex = 1;
 		box->material = mMateirals["fence"].get();
 		box->geometry = mGeometries["Box"].get();
 		box->primitiveTopology = D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
@@ -873,7 +918,7 @@ void InitDirect3DApp::BuildRenderItems()
 	{
 		auto grid = make_unique<RenderItem>();
 		grid->world = MathHelper::Identity4x4();
-		grid->objCbIndex = 1;
+		grid->objCbIndex = 2;
 		grid->geometry = mGeometries["Grid"].get();
 		grid->material = mMateirals["tile0"].get();
 		XMStoreFloat4x4(&grid->texTransform, XMMatrixScaling(8.f, 8.f, 1.f));
@@ -885,7 +930,7 @@ void InitDirect3DApp::BuildRenderItems()
 	{
 		auto skull = make_unique<RenderItem>();
 		XMStoreFloat4x4(&skull->world, XMMatrixScaling(0.5f, 0.5f, 0.5f) * XMMatrixTranslation(0.f, 1.0f, 0.f));
-		skull->objCbIndex = 2;
+		skull->objCbIndex = 3;
 		skull->material = mMateirals["skull"].get();
 		skull->geometry = mGeometries["Skull"].get();
 		skull->primitiveTopology = D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
@@ -893,7 +938,7 @@ void InitDirect3DApp::BuildRenderItems()
 		mRenderItems.push_back(move(skull));
 	}
 
-	UINT objCBIdx = 6;
+	UINT objCBIdx = 4;
 	for (int i = 0; i < 5; ++i)
 	{
 		auto leftCylinder = make_unique<RenderItem>();
@@ -923,14 +968,14 @@ void InitDirect3DApp::BuildRenderItems()
 		XMStoreFloat4x4(&leftSphere->world, leftSphereWorld);
 		leftSphere->objCbIndex = objCBIdx++;
 		leftSphere->geometry = mGeometries["Sphere"].get();
-		leftSphere->material = mMateirals["stone0"].get();
+		leftSphere->material = mMateirals["mirror"].get();
 		mItemLayer[(int)RenderLayer::Opaque].push_back(leftSphere.get());
 		mRenderItems.push_back(move(leftSphere));
 
 		XMStoreFloat4x4(&rightSphere->world, rightSphereWorld);
 		rightSphere->objCbIndex = objCBIdx++;
 		rightSphere->geometry = mGeometries["Sphere"].get();
-		rightSphere->material = mMateirals["stone0"].get();
+		rightSphere->material = mMateirals["mirror"].get();
 		mItemLayer[(int)RenderLayer::Opaque].push_back(rightSphere.get());
 		mRenderItems.push_back(move(rightSphere));
 	}
@@ -942,9 +987,10 @@ void InitDirect3DApp::BuildInputLayout()
 	mInputLayout =
 	{
 		// Shader와 연결됨
-		{"POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0}, // 0 ~ 11 (12)
-		{"NORMAL", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 12, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0}, // 12 ~ 23 (12)
-		{"TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT, 0, 24, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0} // 24 ~ 31 (8)
+		{"POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},	// 0 ~ 11 (12)
+		{"NORMAL", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 12, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},	// 12 ~ 23 (12)
+		{"TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT, 0, 24, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},	// 24 ~ 31 (8)
+		{"TANGENT", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 32, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0}	// 32 ~ 43 (12)
 	};
 }
 
@@ -966,6 +1012,9 @@ void InitDirect3DApp::BuildShader()
 	mShaders["standardVS"] = d3dUtil::CompileShader(L"Color.hlsl", nullptr, "VS", "vs_5_0");
 	mShaders["opaquePS"] = d3dUtil::CompileShader(L"Color.hlsl", defines, "PS", "ps_5_0");
 	mShaders["alphaTestedPS"] = d3dUtil::CompileShader(L"Color.hlsl", alphaTestDefines, "PS", "ps_5_0");
+
+	mShaders["skyboxVS"] = d3dUtil::CompileShader(L"SkyBox.hlsl", nullptr, "VS", "vs_5_0");
+	mShaders["skyboxPS"] = d3dUtil::CompileShader(L"SkyBox.hlsl", nullptr, "PS", "ps_5_0");
 }
 
 void InitDirect3DApp::BuildConstantBuffers()
@@ -1045,16 +1094,28 @@ void InitDirect3DApp::BuildConstantBuffers()
 
 void InitDirect3DApp::BuildRootSignature()
 {
-	CD3DX12_DESCRIPTOR_RANGE texTable[]
+	CD3DX12_DESCRIPTOR_RANGE skyBoxTable[]
 	{
-		CD3DX12_DESCRIPTOR_RANGE(D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 1, 0), // t0
+		CD3DX12_DESCRIPTOR_RANGE(D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 1, 0), // t0 : skybox Texture
 	};
 
-	CD3DX12_ROOT_PARAMETER param[4];
+	CD3DX12_DESCRIPTOR_RANGE texTable[]
+	{
+		CD3DX12_DESCRIPTOR_RANGE(D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 1, 1), // t1 : object diffuse texture
+	};
+
+	CD3DX12_DESCRIPTOR_RANGE normalTable[]
+	{
+		CD3DX12_DESCRIPTOR_RANGE(D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 1, 2), // t2 : object normal texture
+	};
+
+	CD3DX12_ROOT_PARAMETER param[6];
 	param[0].InitAsConstantBufferView(0);	// 0번 -> b0 -> CBV (개별)
 	param[1].InitAsConstantBufferView(1);	// 1번 -> b1 -> CBV (개별 머티리얼)
 	param[2].InitAsConstantBufferView(2);	// 2번 -> b2 -> CBV (공용)
-	param[3].InitAsDescriptorTable(_countof(texTable), texTable);	// 2번 -> b2 -> CBV (공용)
+	param[3].InitAsDescriptorTable(_countof(skyBoxTable), skyBoxTable);	// t0
+	param[4].InitAsDescriptorTable(_countof(texTable), texTable);	// t1
+	param[5].InitAsDescriptorTable(_countof(normalTable), normalTable);	// t1
 
 	D3D12_STATIC_SAMPLER_DESC samplerDesc = CD3DX12_STATIC_SAMPLER_DESC(0);
 
@@ -1075,79 +1136,86 @@ void InitDirect3DApp::BuildDescriptorHeaps()
 
 	// srv 힙
 	D3D12_DESCRIPTOR_HEAP_DESC srvHeapDesc = {};
-	srvHeapDesc.NumDescriptors = 4;
+	srvHeapDesc.NumDescriptors = (int)mTextures.size();
 	srvHeapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
 	srvHeapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
 	md3dDevice->CreateDescriptorHeap(&srvHeapDesc, IID_PPV_ARGS(&mSrvDescriptorHeap));
 
 	CD3DX12_CPU_DESCRIPTOR_HANDLE hDescriptor(mSrvDescriptorHeap->GetCPUDescriptorHandleForHeapStart());
 
-	auto bricksTex = mTextures["bricksTex"]->resource;
-	auto tileTex = mTextures["tileTex"]->resource;
-	auto stoneTex = mTextures["stoneTex"]->resource;
-	auto fenceTex = mTextures["fenceTex"]->resource;
+	vector<ComPtr<ID3D12Resource>> tex2DList =
+	{
+		mTextures["bricks"]->resource,
+		mTextures["bricksNormal"]->resource,
+		mTextures["stone"]->resource,
+		mTextures["tile"]->resource,
+		mTextures["tileNormal"]->resource,
+		mTextures["fence"]->resource,
+		mTextures["default"]->resource
+	};
 
 	D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
 	srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
-	srvDesc.Format = bricksTex->GetDesc().Format;
 	srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
 	srvDesc.Texture2D.MostDetailedMip = 0;
-	srvDesc.Texture2D.MipLevels = bricksTex->GetDesc().MipLevels;
 	srvDesc.Texture2D.ResourceMinLODClamp = 0.0f;
-	md3dDevice->CreateShaderResourceView(bricksTex.Get(), &srvDesc, hDescriptor);
 
-	hDescriptor.Offset(1, mCbvSrvDescriptorSize);	// 다음 Descriptor
+	for (int i = 0; i < (int)tex2DList.size(); i++)
+	{
+		srvDesc.Format = tex2DList[i]->GetDesc().Format;
+		srvDesc.Texture2D.MipLevels = tex2DList[i]->GetDesc().MipLevels;
+		md3dDevice->CreateShaderResourceView(tex2DList[i].Get(), &srvDesc, hDescriptor);
 
-	srvDesc.Format = tileTex->GetDesc().Format;
-	srvDesc.Texture2D.MipLevels = tileTex->GetDesc().MipLevels;
-	md3dDevice->CreateShaderResourceView(tileTex.Get(), &srvDesc, hDescriptor);
+		hDescriptor.Offset(1, mCbvSrvDescriptorSize);	// next Descriptor
+	}
 
-	hDescriptor.Offset(1, mCbvSrvDescriptorSize);	// 다음 Descriptor
+	// --------------- SKY BOX ---------------
+	auto skyCubeMap = mTextures["skyCubeMap"]->resource;
+	srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURECUBE;
+	srvDesc.TextureCube.MostDetailedMip = 0;
+	srvDesc.TextureCube.MipLevels = skyCubeMap->GetDesc().MipLevels;
+	srvDesc.TextureCube.ResourceMinLODClamp = 0.0f;
+	srvDesc.Format = skyCubeMap->GetDesc().Format;
+	md3dDevice->CreateShaderResourceView(skyCubeMap.Get(), &srvDesc, hDescriptor);
+	// ---------------------------------------
 
-	srvDesc.Format = stoneTex->GetDesc().Format;
-	srvDesc.Texture2D.MipLevels = stoneTex->GetDesc().MipLevels;
-	md3dDevice->CreateShaderResourceView(stoneTex.Get(), &srvDesc, hDescriptor);
-
-	hDescriptor.Offset(1, mCbvSrvDescriptorSize);	// 다음 Descriptor
-
-	srvDesc.Format = fenceTex->GetDesc().Format;
-	srvDesc.Texture2D.MipLevels = fenceTex->GetDesc().MipLevels;
-	md3dDevice->CreateShaderResourceView(fenceTex.Get(), &srvDesc, hDescriptor);
+	mSkyboxTexHeapIndex = (UINT)tex2DList.size();
 }
 
 void InitDirect3DApp::BuildPSO()
 {
-	// 불투명 오브젝트 렌더링 파이프라인 상태
-	D3D12_GRAPHICS_PIPELINE_STATE_DESC psoDesc;
-	ZeroMemory(&psoDesc, sizeof(D3D12_GRAPHICS_PIPELINE_STATE_DESC));
+	//  --------- 불투명 오브젝트 렌더링 파이프라인 상태 ----------
+	D3D12_GRAPHICS_PIPELINE_STATE_DESC opaquePsoDesc;
+	ZeroMemory(&opaquePsoDesc, sizeof(D3D12_GRAPHICS_PIPELINE_STATE_DESC));
 
-	psoDesc.InputLayout = { mInputLayout.data(), (UINT)mInputLayout.size() };
-	psoDesc.pRootSignature = mRootSignature.Get();
-	psoDesc.VS =
+	opaquePsoDesc.InputLayout = { mInputLayout.data(), (UINT)mInputLayout.size() };
+	opaquePsoDesc.pRootSignature = mRootSignature.Get();
+	opaquePsoDesc.VS =
 	{
 		reinterpret_cast<BYTE*>(mShaders["standardVS"]->GetBufferPointer()), mShaders["standardVS"]->GetBufferSize()
 	};
-	psoDesc.PS =
+	opaquePsoDesc.PS =
 	{
 		reinterpret_cast<BYTE*>(mShaders["opaquePS"]->GetBufferPointer()), mShaders["opaquePS"]->GetBufferSize()
 	};
 
-	psoDesc.RasterizerState = CD3DX12_RASTERIZER_DESC(D3D12_DEFAULT); // Default로 하면 기본값으로 세팅
-	psoDesc.BlendState = CD3DX12_BLEND_DESC(D3D12_DEFAULT);
-	psoDesc.DepthStencilState = CD3DX12_DEPTH_STENCIL_DESC(D3D12_DEFAULT);
-	psoDesc.SampleMask = UINT_MAX;
-	psoDesc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
-	psoDesc.NumRenderTargets = 1;
-	psoDesc.RTVFormats[0] = mBackBufferFormat;
-	psoDesc.SampleDesc.Count = m4xMsaaState ? 4 : 1;
-	psoDesc.SampleDesc.Quality = m4xMsaaState ? (m4xMsaaQuality - 1) : 0;
-	psoDesc.DSVFormat = mDepthStencilFormat;
+	opaquePsoDesc.RasterizerState = CD3DX12_RASTERIZER_DESC(D3D12_DEFAULT); // Default로 하면 기본값으로 세팅
+	opaquePsoDesc.BlendState = CD3DX12_BLEND_DESC(D3D12_DEFAULT);
+	opaquePsoDesc.DepthStencilState = CD3DX12_DEPTH_STENCIL_DESC(D3D12_DEFAULT);
+	opaquePsoDesc.SampleMask = UINT_MAX;
+	opaquePsoDesc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
+	opaquePsoDesc.NumRenderTargets = 1;
+	opaquePsoDesc.RTVFormats[0] = mBackBufferFormat;
+	opaquePsoDesc.SampleDesc.Count = m4xMsaaState ? 4 : 1;
+	opaquePsoDesc.SampleDesc.Quality = m4xMsaaState ? (m4xMsaaQuality - 1) : 0;
+	opaquePsoDesc.DSVFormat = mDepthStencilFormat;
 
-	ThrowIfFailed(md3dDevice->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&mPSOs["opaque"])));
+	ThrowIfFailed(md3dDevice->CreateGraphicsPipelineState(&opaquePsoDesc, IID_PPV_ARGS(&mPSOs["opaque"])));
+	// --------------------------------------------------------------
 
 
-	// 불투명 오브젝트 렌더링 파이프라인 상태
-	D3D12_GRAPHICS_PIPELINE_STATE_DESC transDesc = psoDesc;
+	//  --------- 투명 오브젝트 렌더링 파이프라인 상태 ----------
+	D3D12_GRAPHICS_PIPELINE_STATE_DESC transDesc = opaquePsoDesc;
 	D3D12_RENDER_TARGET_BLEND_DESC transBlendDesc;
 
 	transBlendDesc.BlendEnable = true;
@@ -1164,10 +1232,11 @@ void InitDirect3DApp::BuildPSO()
 	transDesc.BlendState.RenderTarget[0] = transBlendDesc;
 
 	ThrowIfFailed(md3dDevice->CreateGraphicsPipelineState(&transDesc, IID_PPV_ARGS(&mPSOs["transparent"])));
+	// --------------------------------------------------------------
 
 
-	// 알파 테스트 오브젝트 렌더링 파이프라인 상태
-	D3D12_GRAPHICS_PIPELINE_STATE_DESC alphaDesc = psoDesc;
+	//  --------- 알파 테스트 오브젝트 렌더링 파이프라인 상태 ----------
+	D3D12_GRAPHICS_PIPELINE_STATE_DESC alphaDesc = opaquePsoDesc;
 	alphaDesc.PS =
 	{
 		reinterpret_cast<BYTE*>(mShaders["alphaTestedPS"]->GetBufferPointer()), mShaders["alphaTestedPS"]->GetBufferSize()
@@ -1175,5 +1244,24 @@ void InitDirect3DApp::BuildPSO()
 
 	alphaDesc.RasterizerState.CullMode = D3D12_CULL_MODE_NONE;
 	ThrowIfFailed(md3dDevice->CreateGraphicsPipelineState(&alphaDesc, IID_PPV_ARGS(&mPSOs["alphaTest"])));
+	// --------------------------------------------------------------
 
+	// 스카이박스 오브젝트 렌더링 ㄹ
+	D3D12_GRAPHICS_PIPELINE_STATE_DESC skyPsoDesc = opaquePsoDesc;
+	skyPsoDesc.RasterizerState.CullMode = D3D12_CULL_MODE_NONE;
+	// Far < 1일 때, xyww w = 1
+	// 1까지도 렌더링이 될 수 있도록!
+	skyPsoDesc.DepthStencilState.DepthFunc = D3D12_COMPARISON_FUNC_LESS_EQUAL;
+
+	skyPsoDesc.VS =
+	{
+		reinterpret_cast<BYTE*>(mShaders["skyboxVS"]->GetBufferPointer()), mShaders["skyboxVS"]->GetBufferSize()
+	};
+
+	skyPsoDesc.PS =
+	{
+		reinterpret_cast<BYTE*>(mShaders["skyboxPS"]->GetBufferPointer()), mShaders["skyboxPS"]->GetBufferSize()
+	};
+
+	ThrowIfFailed(md3dDevice->CreateGraphicsPipelineState(&skyPsoDesc, IID_PPV_ARGS(&mPSOs["skybox"])));
 }
