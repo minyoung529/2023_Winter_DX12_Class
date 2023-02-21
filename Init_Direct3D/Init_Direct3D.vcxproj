@@ -149,8 +149,11 @@
     <ClInclude Include="..\Common\GeometryGenerator.h" />
     <ClInclude Include="..\Common\MathHelper.h" />
     <ClInclude Include="D3DApp.h" />
+    <ClInclude Include="D3dHeader.h" />
     <ClInclude Include="InitDirect3DApp.h" />
+    <ClInclude Include="LoadM3d.h" />
     <ClInclude Include="ShadowMap.h" />
+    <ClInclude Include="SkinnedData.h" />
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="..\Common\Camera.cpp" />
@@ -161,7 +164,9 @@
     <ClCompile Include="..\Common\MathHelper.cpp" />
     <ClCompile Include="D3DApp.cpp" />
     <ClCompile Include="InitDirect3DApp.cpp" />
+    <ClCompile Include="LoadM3d.cpp" />
     <ClCompile Include="ShadowMap.cpp" />
+    <ClCompile Include="SkinnedData.cpp" />
   </ItemGroup>
   <ItemGroup>
     <FxCompile Include="Color.hlsl">

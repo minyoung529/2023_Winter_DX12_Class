@@ -10,6 +10,10 @@ struct VertexIn
     float3 NormalL      : NORMAL;
     float3 Uv           : TEXCOORD;
     float3 Tangent      : TANGENT;
+#ifdef SKINNED
+    float3 BoneWeights  : WEIGHTS;
+    uint4 BoneIndices   : BONEINDICES;
+#endif
 };
 
 struct VertexOut
@@ -27,7 +31,30 @@ VertexOut VS(VertexIn vin)
 {
     VertexOut vout;
     
-    float4 posW = mul(float4(vin.PosL, 1.0f), gWorld);
+#ifdef SKINNED
+    float weights[4] = { 0.0f,0.0f,0.0f,0.0f };
+    weights[0] = vin.BoneWeights.x;
+    weights[1] = vin.BoneWeights.y;
+    weights[2] = vin.BoneWeights.z;
+    weights[3] = 1.0f - weights[0] - weights[1] - weights[2];
+    
+    float3 posL = float3(0.0f, 0.0f, 0.0f);
+    float3 normalL = float3(0.0f, 0.0f, 0.0f);
+    float3 tangentL = float3(0.0f, 0.0f, 0.0f);
+    
+    for (int i = 0; i < 4; i++)
+    {
+        posL += weights[i] * mul(float4(vin.PosL, 1.0f), gBoneTrnasforms[vin.BoneIndices[i]]).xyz;
+        normalL += weights[i] * mul(vin.NormalL, (float3x3) gBoneTrnasforms[vin.BoneIndices[i]]);
+        tangentL += weights[i] * mul(vin.Tangent, (float3x3) gBoneTrnasforms[vin.BoneIndices[i]]);
+    }
+    
+    vin.PosL = posL;
+    vin.Tangent = tangentL;
+    vin.NormalL = normalL;
+#endif // SKINNED
+    
+        float4 posW = mul(float4(vin.PosL, 1.0f), gWorld);
     vout.PosH = mul(posW, gViewProj);
     
     vout.PosW = posW.xyz;

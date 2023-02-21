@@ -1,156 +1,15 @@
 #pragma once
 
 #include "D3dApp.h"
+#include "D3dHeader.h"
 #include <DirectXColors.h>
 #include "../Common/MathHelper.h"
 #include "../Common/GeometryGenerator.h"
 #include "../Common/DDSTextureLoader.h"
 #include "../Common/Camera.h"
 #include "ShadowMap.h"
-
-using namespace DirectX;
-using namespace std;
-
-#define MAXLIGHTS 16
-
-enum class RenderLayer : int
-{
-	Opaque = 0,
-	Transparent,
-	AlphaTested,
-	Debug,
-	SkyBox,
-	Count
-};
-
-// 정점 정보
-// 4 맞출 필요 없음
-struct Vertex
-{
-	XMFLOAT3 pos;
-	XMFLOAT3 normal;
-	XMFLOAT2 uv;
-	XMFLOAT3 tangent;
-};
-
-// 개별 오브젝트 상수 (World)
-struct ObjectConstants
-{
-	XMFLOAT4X4 world = MathHelper::Identity4x4(); // 단위 행렬
-	XMFLOAT4X4 texTransform = MathHelper::Identity4x4(); // 단위 행렬
-};
-
-// 개별 오브젝트의 재질 상수
-struct MatConstants
-{
-	XMFLOAT4 diffuseAlbedo = { 1.0f, 1.0f, 1.0f, 1.0f };
-
-	XMFLOAT3 fresnelR0 = { 0.01f, 0.01f, 0.01f };
-	float roughness = 0.25f;
-
-	UINT texture_on = 0;
-	UINT normal_on = 0;
-	XMFLOAT2 padding = { 0.f, 0.f };
-};
-
-struct GeometryInfo
-{
-	string name;
-
-	// 정점 버퍼 뷰
-	ComPtr<ID3D12Resource>		vertexBuffer = nullptr;
-	D3D12_VERTEX_BUFFER_VIEW	vertexBufferView = {};
-
-	// 인덱스 버퍼 뷰
-	ComPtr<ID3D12Resource>		indexBuffer = nullptr;
-	D3D12_INDEX_BUFFER_VIEW		indexBufferView = {};
-
-	// 정점 개수
-	int vertexCount = 0;
-
-	// 인덱스 개수
-	int indexCount = 0;
-};
-
-// Material 구조체
-struct MaterialInfo
-{
-	string name;
-
-	int matCBIdx = -1;
-	int diffuseSrvHeapIndex = -1;
-	int normalSrvHeapIndex = -1;
-
-	XMFLOAT4 diffuseAlbedo = { 1.0f, 1.0f, 1.0f, 1.0f };
-
-	XMFLOAT3 fresnelR0 = { 0.01f, 0.01f, 0.01f };
-	float roughness = 0.25f;
-};
-
-// 오브젝트 구조체
-struct RenderItem
-{
-	RenderItem() = default;
-
-	UINT		objCbIndex = -1;
-	XMFLOAT4X4	world = MathHelper::Identity4x4();
-	XMFLOAT4X4	texTransform = MathHelper::Identity4x4(); 
-
-	D3D12_PRIMITIVE_TOPOLOGY primitiveTopology = D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
-
-	// 기하 정보
-	GeometryInfo* geometry = nullptr;
-	MaterialInfo* material = nullptr;
-};
-
-// 조명 정보 구조체
-struct LightInfo
-{
-	UINT lightType = 0;
-	XMFLOAT3 padding = { 0.f, 0.f, 0.f };
-	XMFLOAT3 strength = { 0.5f, 0.5f, 0.5f };
-	float fallOffStart = 1.0f;
-	XMFLOAT3 direction = { 0.f, -1.f, 0.f };
-	float fallOffEnd = 10.f;
-	XMFLOAT3 position = { 0.f, 0.f, 0.f };
-	float spotPower = 64.f;
-};
-
-// 공용 상수 (View Projection)
-struct PassConstants
-{
-	XMFLOAT4X4 view = MathHelper::Identity4x4();
-	XMFLOAT4X4 invView = MathHelper::Identity4x4(); // inverse
-	XMFLOAT4X4 proj = MathHelper::Identity4x4();
-	XMFLOAT4X4 invProj = MathHelper::Identity4x4();
-	XMFLOAT4X4 viewProj = MathHelper::Identity4x4();
-	XMFLOAT4X4 inViewProj = MathHelper::Identity4x4();
-
-	// 라이트
-	XMFLOAT4X4 shadowTransform = MathHelper::Identity4x4();
-
-	// 조명 정보
-	XMFLOAT4 ambientColor = { 0.f, 0.f, 0.f,1.f };
-	XMFLOAT3 eyePosW = { 0.f, 0.f, 0.f };
-	UINT lightCount = MAXLIGHTS;
-	LightInfo lights[MAXLIGHTS];
-
-	// 안개 효과 정보
-	XMFLOAT4 fogColor = { 0.7f, 0.7f, 0.7f, 1.0f };
-	float gFogStart = 5.0f;
-	float gFogRange = 150.0f;
-	XMFLOAT2 fogPadding;
-};
-
-// Texture 구조체
-struct TextureInfo
-{
-	string name;
-	wstring fileName;
-
-	ComPtr<ID3D12Resource> resource = nullptr;
-	ComPtr<ID3D12Resource> uploadHeap = nullptr;
-};
+#include "LoadM3d.h"
+#include "SkinnedData.h"
 
 class InitDirect3DApp : public D3DApp
 {
@@ -170,6 +29,7 @@ private:
 	void UpdateShadowTransform(const GameTimer& gt);
 	void UpdatePassCB(const GameTimer& gt);
 	void UpdateShadowPassCB(const GameTimer& gt);
+	void UpdateSkinnedPassCBs(const GameTimer& gt);
 
 	virtual void DrawBegin(const GameTimer& gt) override;
 	
@@ -184,7 +44,10 @@ private:
 	virtual void OnMouseMove(WPARAM btnState, int x, int y) override;
 
 private:
-	// 테스쳐 로드
+	// Skinned Model 로드
+	void LoadSkinnedModel();
+
+	// 텍스쳐 로드
 	void LoadTextures();
 
 	// 기하 도형 생성
@@ -216,6 +79,9 @@ private:
 	// ------- 입력 배치 ------- 
 	vector<D3D12_INPUT_ELEMENT_DESC> mInputLayout;
 
+	// 스키닝 애니메이션용 입력 조립기
+	vector<D3D12_INPUT_ELEMENT_DESC> mSkinnedInputLayout;
+
 	// 개별 오브젝트 상수 버퍼
 	ComPtr<ID3D12Resource> mObjectCB = nullptr;		// 열고 닫고 X
 	BYTE* mObjectMappedData = nullptr;				// 복사되는 것
@@ -223,13 +89,18 @@ private:
 
 	// 개별 오브젝트 머티리얼 상수 버퍼
 	ComPtr<ID3D12Resource> mMaterialCB = nullptr;
-	BYTE* mMaterialMappedData = nullptr;
+	BYTE* mMaterialMappedData = nullptr;	// 바로 업로드가 안 되므로...
 	UINT mMaterialByteSize = 0;
 
 	// 공용 오브젝트 상수 버퍼
 	ComPtr<ID3D12Resource> mPassCB = nullptr;
 	BYTE* mPassMappedData = nullptr;
 	UINT mPassByteSize = 0;
+
+	// Bone Transform 버퍼
+	ComPtr<ID3D12Resource> mSkinnedCB = nullptr;
+	BYTE* mSkinnedMappedData = nullptr;
+	UINT mSkinnedByteSize = 0;
 
 	// 오브젝트마다 뷰를 만들 수 없으니... 루트 시그니처가 관리하게 해준다
 	// (루트 시그니처 > 버퍼) or (루트 시그니처 > Desc 테이블 > 버퍼) 
@@ -272,6 +143,16 @@ private:
 
 	// 그림자 맵 디스크립터
 	CD3DX12_GPU_DESCRIPTOR_HANDLE mShadowMapSrv;
+
+	// Skinned Model Data
+	UINT mSkinnedSrvHeapStart = 0;
+	string mSkinnedModelFileName = "..\\Models\\soldier.m3d";
+	SkinnedData mSkinnedInfo;
+	vector<M3DLoader::Subset> mSkinnedSubsets;
+	vector<M3DLoader::M3dMaterial> mSkinnedMats;
+	vector<string> mSkinnedTextureName;
+
+	unique_ptr<SkinnedModelInstance> mSkinnedModelInst;
 
 	// 경계 구 : 광원 이동
 	DirectX::BoundingSphere mSceneBounds;
