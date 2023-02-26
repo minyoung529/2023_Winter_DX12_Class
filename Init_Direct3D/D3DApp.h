@@ -63,7 +63,9 @@ protected:
 	void CreateCommandObject();	// Comamnd~ 
 	void CreateSwapChain();
 	void CreateRtvDescriptorHeaps();
+	void CreateRtv();
 	void CreateDsvDescriptorHeaps();
+	void CreateDsv();
 	void CreateViewPort();
 
 public:
@@ -127,6 +129,7 @@ protected:
 	int						mCurBackBuffer = 0;
 	ComPtr<ID3D12Resource>	mSwapChainBuffer[SwapChainBufferCount];
 
+	// RTV Desc Heap 
 	ComPtr<ID3D12DescriptorHeap>		mRtvHeap;
 	D3D12_CPU_DESCRIPTOR_HANDLE			mRtvView[SwapChainBufferCount] = {};	// аж╪р?
 

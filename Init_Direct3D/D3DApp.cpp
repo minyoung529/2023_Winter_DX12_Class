@@ -311,11 +311,11 @@ bool D3DApp::InitDirect3D()
 	// Device 생성이 첫번째
 #pragma region  DEVICE
 // IID => 아이디로 바꿔줌 
-	ThrowIfFailed(CreateDXGIFactory1(IID_PPV_ARGS(&mdxgiFactory)));
+	CreateDXGIFactory1(IID_PPV_ARGS(&mdxgiFactory));
 
 	HRESULT hardwareResult = D3D12CreateDevice
 	(
-		nullptr/*Default Adapter (Base GPU)*/,
+		nullptr /*Default Adapter (Base GPU)*/,
 		D3D_FEATURE_LEVEL_11_0,
 		IID_PPV_ARGS(&md3dDevice)
 	);
@@ -325,19 +325,19 @@ bool D3DApp::InitDirect3D()
 		ComPtr<IDXGIAdapter> pWarpAdapter;
 		// Adapter를 하나씩 가지고옴
 
-		ThrowIfFailed(mdxgiFactory->EnumWarpAdapter(IID_PPV_ARGS(&pWarpAdapter)));
+		mdxgiFactory->EnumWarpAdapter(IID_PPV_ARGS(&pWarpAdapter));
 
-		ThrowIfFailed(D3D12CreateDevice
+		D3D12CreateDevice
 		(
 			pWarpAdapter.Get(), // 객체
 			D3D_FEATURE_LEVEL_11_0,
 			IID_PPV_ARGS(&md3dDevice)
-		));
+		);
 	}
 #pragma endregion
 
 #pragma region Fence
-	ThrowIfFailed(md3dDevice->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&mFence)));
+	md3dDevice->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&mFence));
 #pragma endregion
 
 #pragma region RTV Descriptor Size
@@ -378,7 +378,9 @@ bool D3DApp::InitDirect3D()
 	CreateCommandObject();
 	CreateSwapChain();
 	CreateRtvDescriptorHeaps();
+	CreateRtv();
 	CreateDsvDescriptorHeaps();
+	CreateDsv();
 	CreateViewPort();
 
 	return true;
@@ -391,13 +393,13 @@ void D3DApp::FlushCommandQueue()
 {
 	mCurrentFence++;
 
-	ThrowIfFailed(mCommandQueue->Signal(mFence.Get(), mCurrentFence));
+	mCommandQueue->Signal(mFence.Get(), mCurrentFence);
 
 	if (mFence->GetCompletedValue() < mCurrentFence)
 	{
 		HANDLE eventHandle = CreateEventEx(nullptr, false, false, EVENT_ALL_ACCESS);
 
-		ThrowIfFailed(mFence->SetEventOnCompletion(mCurrentFence, eventHandle));
+		mFence->SetEventOnCompletion(mCurrentFence, eventHandle);
 
 		// 이벤트 끝날 때까지 대기
 		WaitForSingleObject(eventHandle, INFINITE);
@@ -414,26 +416,26 @@ void D3DApp::CreateCommandObject()
 	queueDesc.Flags = D3D12_COMMAND_QUEUE_FLAG_NONE;
 
 	// Cmd Queue
-	ThrowIfFailed(md3dDevice->CreateCommandQueue
+	md3dDevice->CreateCommandQueue
 	(
 		&queueDesc,
 		IID_PPV_ARGS(&mCommandQueue)
-	));
+	);
 
 	// Cmd Alloc
-	ThrowIfFailed(md3dDevice->CreateCommandAllocator(
+	md3dDevice->CreateCommandAllocator(
 		D3D12_COMMAND_LIST_TYPE_DIRECT,
 		IID_PPV_ARGS(&mDirectCmdListAlloc)
-	));
+	);
 
 	// Cmd List
-	ThrowIfFailed(md3dDevice->CreateCommandList(
+	md3dDevice->CreateCommandList(
 		0,
 		D3D12_COMMAND_LIST_TYPE_DIRECT,
 		mDirectCmdListAlloc.Get(),
 		nullptr,
 		IID_PPV_ARGS(&mCommandList)
-	));
+	);
 
 	mCommandList->Close();
 }
@@ -461,42 +463,42 @@ void D3DApp::CreateSwapChain()
 	scDesc.SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD;
 	scDesc.Flags = DXGI_SWAP_CHAIN_FLAG_ALLOW_MODE_SWITCH;
 
-	// SWAP CHAIN 만듦
-	ThrowIfFailed(mdxgiFactory->CreateSwapChain
+	// SWAP CHAIN 생성
+	mdxgiFactory->CreateSwapChain
 	(
 		mCommandQueue.Get(),
 		&scDesc,
 		&mSwapChain
-	));
+	);
 
 	for (int i = 0; i < SwapChainBufferCount; ++i)
 	{
-		ThrowIfFailed(mSwapChain->GetBuffer(i, IID_PPV_ARGS(&mSwapChainBuffer[i])));
+		mSwapChain->GetBuffer(i, IID_PPV_ARGS(&mSwapChainBuffer[i]));
 	}
 }
 
 void D3DApp::CreateRtvDescriptorHeaps()
 {
-	// GPU가 인식을 할 수 있어야 함!
+	D3D12_DESCRIPTOR_HEAP_DESC rtvHeapDesc = {};
+	rtvHeapDesc.NumDescriptors = SwapChainBufferCount;		// RenderTarget 개수만큼
+	rtvHeapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_RTV;		// RTV Heap
+	rtvHeapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_NONE;	  
+	rtvHeapDesc.NodeMask = 0;								// 단일 GPU 어댑터이므로 0
 
-	D3D12_DESCRIPTOR_HEAP_DESC rtvHeapDesc;
-	rtvHeapDesc.NumDescriptors = SwapChainBufferCount;
-	rtvHeapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_RTV;
-	rtvHeapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_NONE;
-	rtvHeapDesc.NodeMask = 0;
-
-	ThrowIfFailed(md3dDevice->CreateDescriptorHeap
+	md3dDevice->CreateDescriptorHeap
 	(
 		&rtvHeapDesc,
 		IID_PPV_ARGS(&mRtvHeap)
-	));
+	);
+}
 
+void D3DApp::CreateRtv()
+{
 	CD3DX12_CPU_DESCRIPTOR_HANDLE rtvHeapHandle(mRtvHeap->GetCPUDescriptorHandleForHeapStart());
+	
 	for (int i = 0; i < SwapChainBufferCount; i++)
 	{
 		mRtvView[i] = CD3DX12_CPU_DESCRIPTOR_HANDLE(rtvHeapHandle, i * mRtvDescriptorSize);
-		// SwapChainBuffer, RTV View가 1:1 매칭
-		// GPU가 View를 통해서 Buffer에 접근?
 		md3dDevice->CreateRenderTargetView(mSwapChainBuffer[i].Get(), nullptr, mRtvView[i]);
 	}
 }
@@ -509,12 +511,15 @@ void D3DApp::CreateDsvDescriptorHeaps()
 	dsvHeapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_NONE;
 	dsvHeapDesc.NodeMask = 0;
 
-	ThrowIfFailed(md3dDevice->CreateDescriptorHeap
+	md3dDevice->CreateDescriptorHeap
 	(
 		&dsvHeapDesc,
 		IID_PPV_ARGS(&mDsvHeap)	// 시작 주소
-	));
+	);
+}
 
+void D3DApp::CreateDsv()
+{
 	D3D12_RESOURCE_DESC depthStencilDesc;
 	depthStencilDesc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
 	depthStencilDesc.Alignment = 0;
@@ -536,7 +541,7 @@ void D3DApp::CreateDsvDescriptorHeaps()
 	optClear.DepthStencil.Stencil = 0.f;
 
 	//CommittedResource => CPU, GPU 공통 사용
-	ThrowIfFailed(md3dDevice->CreateCommittedResource
+	md3dDevice->CreateCommittedResource
 	(
 		&CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_DEFAULT), // GPU만 사용 가능
 		D3D12_HEAP_FLAG_NONE,
@@ -544,7 +549,7 @@ void D3DApp::CreateDsvDescriptorHeaps()
 		D3D12_RESOURCE_STATE_COMMON,
 		&optClear,
 		IID_PPV_ARGS(&mDepthStencilBuffer)
-	));
+	);
 
 	D3D12_DEPTH_STENCIL_VIEW_DESC dsvDesv;
 	dsvDesv.Flags = D3D12_DSV_FLAG_NONE;
@@ -554,7 +559,6 @@ void D3DApp::CreateDsvDescriptorHeaps()
 
 	mDsvView = mDsvHeap->GetCPUDescriptorHandleForHeapStart();
 	md3dDevice->CreateDepthStencilView(mDepthStencilBuffer.Get(), &dsvDesv, mDsvView);
-	// 머리빙빙~~~~~~~~~~
 }
 
 void D3DApp::CreateViewPort()
