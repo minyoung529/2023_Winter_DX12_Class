@@ -44,9 +44,7 @@ bool InitDirect3DApp::Initialize()
 	mCommandList->Reset(mDirectCmdListAlloc.Get(), nullptr);
 
 	// 렌더링 파이프라인을 위한 초기화
-	BuildGeometry();
 	BuildCube();
-	BuildLandGeometry();
 	BuildInputLayout();
 	BuildShader();
 	BuildConstantBuffers();
