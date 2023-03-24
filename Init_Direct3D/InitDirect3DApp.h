@@ -25,7 +25,10 @@ struct RenderItem
 {
 	RenderItem() = default;
 
+	// 상수 버퍼에서 쓰일 오브젝트 인덱스
 	UINT objCbIndex = -1;
+
+	// 월드 포지션
 	XMFLOAT4X4 world = MathHelper::Identity4x4();
 
 	D3D12_PRIMITIVE_TOPOLOGY primitiveTopology = D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
@@ -105,13 +108,13 @@ private:
 	ComPtr<ID3DBlob> mpsByteCode = nullptr;
 
 	// 개별 오브젝트 상수 버퍼
-	ComPtr<ID3D12Resource> mObjectCB = nullptr;	// 열고 닫고 X
-	BYTE* mObjectMappedData = nullptr;			// 복사되는 것
+	ComPtr<ID3D12Resource> mObjectCB = nullptr;	// 개별 오브젝트 상수 버퍼
+	BYTE* mObjectMappedData = nullptr;			// 복사할 포인터
 	UINT mObjectByteSize = 0;
 
 	// 공용 오브젝트 상수 버퍼
-	ComPtr<ID3D12Resource> mPassCB = nullptr;	// 열고 닫고 X
-	BYTE* mPassMappedData = nullptr;			// 복사되는 것
+	ComPtr<ID3D12Resource> mPassCB = nullptr;	// 공용 오브젝트 상수 버퍼
+	BYTE* mPassMappedData = nullptr;			// 복사할 포인터
 	UINT mPassByteSize = 0;
 
 	// 오브젝트마다 뷰를 만들 수 없으니... 루트 시그니처가 관리하게 해준다
@@ -122,7 +125,7 @@ private:
 	ComPtr<ID3D12PipelineState> mPSO = nullptr;
 
 	// 렌더링할 오브젝트 리스트
-	vector<unique_ptr< RenderItem>> mRenderItems;
+	vector<unique_ptr<RenderItem>> mRenderItems;
 
 	// ------- World / View / Projection -------
 	XMFLOAT4X4 mWorld = MathHelper::Identity4x4();	// 단위 행렬
@@ -136,5 +139,4 @@ private:
 
 	// 마우스 좌표
 	POINT mLastMousePos = { 0,0 };
-
 };

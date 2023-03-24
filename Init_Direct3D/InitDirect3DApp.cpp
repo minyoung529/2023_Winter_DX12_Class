@@ -100,6 +100,7 @@ void InitDirect3DApp::UpdateObjectCBs(const GameTimer& gt)
 {
 	for (auto& e : mRenderItems)
 	{
+		// 현재 Render Object의 행렬 가지고 옴
 		XMMATRIX world = XMLoadFloat4x4(&e->world);
 
 		ObjectConstants objectConstants;
@@ -108,6 +109,7 @@ void InitDirect3DApp::UpdateObjectCBs(const GameTimer& gt)
 		UINT elementIdx = e->objCbIndex;
 		UINT elementByteSize = (sizeof(ObjectConstants) + 255) & ~255;
 
+		// 상수 버퍼에 복사
 		memcpy(&mObjectMappedData[elementIdx * elementByteSize], &objectConstants, sizeof(ObjectConstants));
 	}
 }
@@ -117,10 +119,11 @@ void InitDirect3DApp::UpdatePassCB(const GameTimer& gt)
 	PassConstants passConstants;
 	XMMATRIX view = XMLoadFloat4x4(&mView);
 	XMMATRIX proj = XMLoadFloat4x4(&mProj);
+	XMMATRIX viewProj = XMMatrixMultiply(view, proj);
 
+	// 역행렬
 	XMMATRIX invView = XMMatrixInverse(&XMMatrixDeterminant(view), view);
 	XMMATRIX invProj = XMMatrixInverse(&XMMatrixDeterminant(proj), proj);
-	XMMATRIX viewProj = XMMatrixMultiply(view, proj);
 
 	XMStoreFloat4x4(&passConstants.view, XMMatrixTranspose(view));
 	XMStoreFloat4x4(&passConstants.proj, XMMatrixTranspose(proj));
@@ -128,7 +131,7 @@ void InitDirect3DApp::UpdatePassCB(const GameTimer& gt)
 	XMStoreFloat4x4(&passConstants.invProj, XMMatrixTranspose(invProj));
 	XMStoreFloat4x4(&passConstants.viewProj, XMMatrixTranspose(viewProj));
 
-	memcpy(&mPassMappedData[0], &passConstants, sizeof(PassConstants));
+	memcpy(mPassMappedData, &passConstants, sizeof(PassConstants));
 }
 
 void InitDirect3DApp::DrawBegin(const GameTimer& gt)
@@ -194,7 +197,8 @@ void InitDirect3DApp::DrawRenderItems(const GameTimer& gt)
 		mCommandList->IASetPrimitiveTopology(item->primitiveTopology);
 
 		// Render
-		mCommandList->DrawIndexedInstanced(item->indexCount, 1, 0, 0, 0);
+		//mCommandList->DrawIndexedInstanced(item->indexCount, 1, 0, 0, 0);
+		mCommandList->DrawInstanced(item->vertexCount, 1, 0, 0);
 	}
 }
 
@@ -263,7 +267,7 @@ void InitDirect3DApp::BuildGeometry()
 	// 정점 정보
 	std::array<Vertex, 5> vertices =
 	{
-		Vertex({XMFLOAT3(0.0f,	 1.0f,	0.0f), XMFLOAT4(Colors::Cyan)}), // 
+		Vertex({XMFLOAT3(0.0f,	 1.0f,	0.0f), XMFLOAT4(Colors::Cyan)}),
 		Vertex({XMFLOAT3(-1.0f, -1.0f,	1.0f), XMFLOAT4(Colors::Magenta)}),
 		Vertex({XMFLOAT3(1.0f,	-1.0f,	1.0f), XMFLOAT4(Colors::Yellow)}),
 		Vertex({XMFLOAT3(-1.0f, -1.0f, -1.0f), XMFLOAT4(Colors::Blue)}),
@@ -277,7 +281,6 @@ void InitDirect3DApp::BuildGeometry()
 		0, 3, 4,
 		0, 1, 3,
 		1, 2, 3,
-		//1, 2, 4
 		2, 4, 3
 	};
 
@@ -301,7 +304,7 @@ void InitDirect3DApp::BuildGeometry()
 		&heapProperty,
 		D3D12_HEAP_FLAG_NONE,
 		&desc,
-		D3D12_RESOURCE_STATE_GENERIC_READ,	// 읽기만 가능
+		D3D12_RESOURCE_STATE_GENERIC_READ,
 		nullptr,
 		IID_PPV_ARGS(&coneItem->vertexBuffer)
 	);
@@ -312,10 +315,11 @@ void InitDirect3DApp::BuildGeometry()
 
 	void* vertexDataBuffer = nullptr; // 빈 버퍼에다 복사
 	CD3DX12_RANGE vertexRange(0, 0);
-	coneItem->vertexBuffer->Map(0, &vertexRange, &vertexDataBuffer); // 연다?
-	memcpy(vertexDataBuffer, &vertices, vbByteSize);		// 복사
-	coneItem->vertexBuffer->Unmap(0, nullptr);						// 다시 닫기
+	coneItem->vertexBuffer->Map(0, &vertexRange, &vertexDataBuffer);	// 연다?
+	memcpy(vertexDataBuffer, &vertices, vbByteSize);					// 복사
+	coneItem->vertexBuffer->Unmap(0, nullptr);							// 다시 닫기
 
+	// View
 	coneItem->vertexBufferView.BufferLocation = coneItem->vertexBuffer->GetGPUVirtualAddress();
 	coneItem->vertexBufferView.StrideInBytes = sizeof(Vertex);
 	coneItem->vertexBufferView.SizeInBytes = vbByteSize;
@@ -372,101 +376,89 @@ void InitDirect3DApp::BuildCube()
 
 	std::array<std::uint16_t, 36> indices =
 	{
-		1,2,3,
-		1,3,4,
+		0,1,2,
+		0,2,3,
 
-		4,3,7,
-		4,7,8,
-
-		7,6,5,
-		7,5,8,
-
-		3,6,7,
 		3,2,6,
+		3,6,7,
 
-		2,1,5,
+		6,5,4,
+		6,4,7,
+
 		2,5,6,
+		2,1,5,
 
-		1,4,8,
-		1, 8, 5
+		1,0,4,
+		1,4,5,
+
+		0,3,7,
+		0,7,4
 	};
 
-	for (int i = 0; i < indices.size(); i++)
-	{
-		indices[i] -= 1;
-	}
-
-	auto coneItem = make_unique<RenderItem>();
-	coneItem->objCbIndex = 2;
-	XMStoreFloat4x4(&coneItem->world, XMMatrixTranslation(5.0f, 5.0f, 0.0f));
-	coneItem->primitiveTopology = D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
+	auto cube = make_unique<RenderItem>();
+	cube->objCbIndex = 2;
+	XMStoreFloat4x4(&cube->world, XMMatrixTranslation(5.0f, 5.0f, 0.0f));
+	cube->primitiveTopology = D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
 
 
 #pragma region  VERTEX BUFFER
 	// 정점 버퍼 생성
-	coneItem->vertexCount = (UINT)vertices.size();
-	const UINT vbByteSize = coneItem->vertexCount * sizeof(Vertex);
+	cube->vertexCount = (UINT)vertices.size();
+	const UINT vbByteSize = cube->vertexCount * sizeof(Vertex);
 
 	// upload buffer (CPU, GPU 모두 건드릴 수 있음)
-	D3D12_HEAP_PROPERTIES heapProperty = CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_UPLOAD);
-	D3D12_RESOURCE_DESC desc = CD3DX12_RESOURCE_DESC::Buffer(vbByteSize);	// 정점의 크기만큼 버퍼 만듦
-
 	md3dDevice->CreateCommittedResource
 	(
-		&heapProperty,
+		&CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_UPLOAD),
 		D3D12_HEAP_FLAG_NONE,
-		&desc,
+		&CD3DX12_RESOURCE_DESC::Buffer(vbByteSize),
 		D3D12_RESOURCE_STATE_GENERIC_READ,	// 읽기만 가능
 		nullptr,
-		IID_PPV_ARGS(&coneItem->vertexBuffer)
+		IID_PPV_ARGS(&cube->vertexBuffer)
 	);
 
 
 	// --- 데이터를 복사하는 방법 ---
 	// 직접적으로 접근 X
-
-	void* vertexDataBuffer = nullptr; // 빈 버퍼에다 복사
+	void* vertexDataBuffer = nullptr;
 	CD3DX12_RANGE vertexRange(0, 0);
-	coneItem->vertexBuffer->Map(0, &vertexRange, &vertexDataBuffer); // 연다?
-	memcpy(vertexDataBuffer, &vertices, vbByteSize);		// 복사
-	coneItem->vertexBuffer->Unmap(0, nullptr);						// 다시 닫기
+	cube->vertexBuffer->Map(0, &vertexRange, &vertexDataBuffer);	// 연다
+	memcpy(vertexDataBuffer, &vertices, vbByteSize);					// 복사
+	cube->vertexBuffer->Unmap(0, nullptr);							// 다시 닫기
 
-	coneItem->vertexBufferView.BufferLocation = coneItem->vertexBuffer->GetGPUVirtualAddress();
-	coneItem->vertexBufferView.StrideInBytes = sizeof(Vertex);
-	coneItem->vertexBufferView.SizeInBytes = vbByteSize;
+	cube->vertexBufferView.BufferLocation = cube->vertexBuffer->GetGPUVirtualAddress();
+	cube->vertexBufferView.StrideInBytes = sizeof(Vertex);
+	cube->vertexBufferView.SizeInBytes = vbByteSize;
 #pragma endregion
 
 #pragma region  INDEX BUFFER
 	// 인덱스 버퍼 생성
-	coneItem->indexCount = (UINT)indices.size();
-	const UINT ibByteSize = coneItem->indexCount * sizeof(std::uint16_t);
+	cube->indexCount = (UINT)indices.size();
+	const UINT ibByteSize = cube->indexCount * sizeof(std::uint16_t);
 
 	// upload buffer (CPU, GPU 모두 건드릴 수 있음)
-	heapProperty = CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_UPLOAD);
-	desc = CD3DX12_RESOURCE_DESC::Buffer(ibByteSize);	// 정점의 크기만큼 버퍼 만듦
-
 	md3dDevice->CreateCommittedResource
 	(
-		&heapProperty,
+		&CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_UPLOAD),
 		D3D12_HEAP_FLAG_NONE,
-		&desc,
+		&CD3DX12_RESOURCE_DESC::Buffer(ibByteSize),
 		D3D12_RESOURCE_STATE_GENERIC_READ,	// 읽기만 가능
 		nullptr,
-		IID_PPV_ARGS(&coneItem->indexBuffer)
+		IID_PPV_ARGS(&cube->indexBuffer)
 	);
 
-	void* IndexDataBuffer = nullptr; // 빈 버퍼에다 복사
+	void* IndexDataBuffer = nullptr;
 	CD3DX12_RANGE indexRange(0, 0);
-	coneItem->indexBuffer->Map(0, &indexRange, &IndexDataBuffer); // 연다?
-	memcpy(IndexDataBuffer, &indices, ibByteSize);		// 복사
-	coneItem->indexBuffer->Unmap(0, nullptr);						// 다시 닫기
+	cube->indexBuffer->Map(0, &indexRange, &IndexDataBuffer);		// 연다
+	memcpy(IndexDataBuffer, &indices, ibByteSize);					// 복사
+	cube->indexBuffer->Unmap(0, nullptr);							// 다시 닫기
 
-	coneItem->indexBufferView.BufferLocation = coneItem->indexBuffer->GetGPUVirtualAddress();
-	coneItem->indexBufferView.Format = DXGI_FORMAT_R16_UINT;
-	coneItem->indexBufferView.SizeInBytes = ibByteSize;
+	cube->indexBufferView.BufferLocation = cube->indexBuffer->GetGPUVirtualAddress();
+	cube->indexBufferView.Format = DXGI_FORMAT_R16_UINT;
+	cube->indexBufferView.SizeInBytes = ibByteSize;
 #pragma endregion
 
-	mRenderItems.push_back(move(coneItem));
+	mRenderItems.push_back(move(cube));
 }
 
 void InitDirect3DApp::BuildLandGeometry()
@@ -677,22 +669,29 @@ void InitDirect3DApp::BuildRootSignature()
 	ComPtr<ID3DBlob> blobSignature;
 	ComPtr<ID3DBlob> blobError;
 
-	::D3D12SerializeRootSignature(&sigDesc, D3D_ROOT_SIGNATURE_VERSION_1, &blobSignature, &blobError);
-	md3dDevice->CreateRootSignature(0, blobSignature->GetBufferPointer(), blobSignature->GetBufferSize(),
-		IID_PPV_ARGS(&mRootSignature));
+	D3D12SerializeRootSignature(&sigDesc, D3D_ROOT_SIGNATURE_VERSION_1, &blobSignature, &blobError);
+
+	md3dDevice->CreateRootSignature
+	(
+		0,
+		blobSignature->GetBufferPointer(),
+		blobSignature->GetBufferSize(),
+		IID_PPV_ARGS(&mRootSignature)
+	);
 }
 
 void InitDirect3DApp::BuildPSO()
 {
-	D3D12_GRAPHICS_PIPELINE_STATE_DESC psoDesc;
-	ZeroMemory(&psoDesc, sizeof(D3D12_GRAPHICS_PIPELINE_STATE_DESC));
+	D3D12_GRAPHICS_PIPELINE_STATE_DESC psoDesc = {};
 
 	psoDesc.InputLayout = { mInputLayout.data(), (UINT)mInputLayout.size() };
 	psoDesc.pRootSignature = mRootSignature.Get();
-	psoDesc.VS = {
+	psoDesc.VS =
+	{
 		reinterpret_cast<BYTE*>(mvsByteCode->GetBufferPointer()), mvsByteCode->GetBufferSize()
 	};
-	psoDesc.PS = {
+	psoDesc.PS =
+	{
 		reinterpret_cast<BYTE*>(mpsByteCode->GetBufferPointer()), mpsByteCode->GetBufferSize()
 	};
 
@@ -702,10 +701,12 @@ void InitDirect3DApp::BuildPSO()
 	psoDesc.SampleMask = UINT_MAX;
 	psoDesc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
 	psoDesc.NumRenderTargets = 1;
+
 	psoDesc.RTVFormats[0] = mBackBufferFormat;
-	psoDesc.SampleDesc.Count = m4xMsaaState ? 4 : 1;
-	psoDesc.SampleDesc.Quality = m4xMsaaState ? (m4xMsaaQuality - 1) : 0;
 	psoDesc.DSVFormat = mDepthStencilFormat;
 
-	ThrowIfFailed(md3dDevice->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&mPSO)));
+	psoDesc.SampleDesc.Count = m4xMsaaState ? 4 : 1;
+	psoDesc.SampleDesc.Quality = m4xMsaaState ? (m4xMsaaQuality - 1) : 0;
+
+	md3dDevice->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&mPSO));
 }

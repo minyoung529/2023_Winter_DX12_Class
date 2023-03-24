@@ -1,4 +1,3 @@
-
 cbuffer cbPerObject : register(b0)
 {
     float4x4 gWorld;
@@ -15,8 +14,8 @@ cbuffer cbPass : register(b1)
 
 struct VertexIn
 {
-    float3 PosL : POSITION; // local
-    float4 Color : COLOR;
+    float3 PosL : POSITION; // Local Position
+    float4 Color : COLOR;   
 };
 
 struct VertexOut
